@@ -145,6 +145,17 @@ Modify `config/web.php`:
 $config = [
     'id' => 'my-app',
     'basePath' => dirname(__DIR__),
+    'components' => [
+        'request' => [
+            //... other config
+            'baseUrl' => '',
+        ],
+        'assetManager' => [
+            //... other config
+            'basePath' => dirname(__DIR__) . '/web/assets',
+            'baseUrl' => '/assets',
+        ],
+    ],
     // ... other config
 ];
 
