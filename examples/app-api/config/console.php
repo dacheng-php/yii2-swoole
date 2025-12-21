@@ -7,7 +7,9 @@ $commonConfig = require __DIR__ . '/common.php';
 $config = [
     'id' => 'yii2-swoole-console',
     'basePath' => dirname(__DIR__),
-    'bootstrap' => ['log'],
+    'bootstrap' => [
+        'swooleHttpServer',
+    ],
     'controllerNamespace' => 'app\commands',
     'controllerMap' => [],
     'components' => [
@@ -29,6 +31,13 @@ $config = [
                     'microtime' => true,
                 ],
             ],
+        ],
+        'swooleHttpServer' => [
+            'memoryLimit' => '2G',
+            'classMap' => [
+                'yii\helpers\ArrayHelper' => '@app/helpers/ArrayHelper.php',
+            ],
+            'dispatcher' => new \Dacheng\Yii2\Swoole\Server\RequestDispatcher(__DIR__ . '/web.php'),
         ],
     ],
     'params' => require __DIR__ . '/params.php',

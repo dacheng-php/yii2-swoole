@@ -160,12 +160,15 @@ class RequestDispatcher extends BaseObject implements RequestDispatcherInterface
             $yiiResponse->content = null;
             $yiiResponse->stream = null;
             $yiiResponse->format = $this->defaultResponseFormat ?? YiiResponse::FORMAT_HTML;
-            if (property_exists($yiiResponse, '_headers')) {
-                $yiiResponse->_headers = null;
+            if (!$app->request->isConsoleRequest) {
+                if(property_exists($yiiResponse, '_headers')){
+                    $yiiResponse->_headers = null;
+                }
+                if (property_exists($yiiResponse, '_cookies')) {
+                    $yiiResponse->_cookies = null;
+                }
             }
-            if (property_exists($yiiResponse, '_cookies')) {
-                $yiiResponse->_cookies = null;
-            }
+
             $yiiResponse->clear();
             
             // Clear request data

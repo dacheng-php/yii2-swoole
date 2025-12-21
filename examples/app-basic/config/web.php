@@ -5,7 +5,7 @@ $commonConfig = require __DIR__ . '/common.php';
 $config = [
     'id' => 'basic',
     'basePath' => dirname(__DIR__),
-    'bootstrap' => ['log'],
+    'bootstrap' => [],
     'aliases' => [
         '@bower' => '@vendor/bower-asset',
         '@npm'   => '@vendor/npm-asset',
@@ -75,7 +75,7 @@ $config = [
     'params' => require __DIR__ . '/params.php',
 ];
 
-$config = \yii\helpers\BaseArrayHelper::merge($commonConfig, $config);
+$config = \yii\helpers\BaseArrayHelper::merge($config, $commonConfig);
 
 if (YII_ENV_DEV) {
 //    if (class_exists('yii\\debug\\Module')) {

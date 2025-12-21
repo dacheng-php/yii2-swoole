@@ -187,7 +187,10 @@ class CoroutineApplication extends Application
         $this->requestedRoute = null;
         $this->requestedAction = null;
         $this->requestedParams = null;
-        $this->requestedModule = null;
+
+        //todo no defined function
+//        $this->requestedModule = null;
+
         $this->state = self::STATE_BEGIN;
         
         // Clear coroutine context

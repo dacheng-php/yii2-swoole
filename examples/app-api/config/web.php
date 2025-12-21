@@ -5,7 +5,6 @@ $commonConfig = require __DIR__ . '/common.php';
 $config = [
     'id' => 'yii2-swoole-example',
     'basePath' => dirname(__DIR__),
-    'bootstrap' => ['log'],
     'components' => [
         'request' => [
             'cookieValidationKey' => 'test-secret-key',
@@ -59,7 +58,7 @@ $config = [
     'params' => require __DIR__ . '/params.php',
 ];
 
-$config = \yii\helpers\BaseArrayHelper::merge($commonConfig, $config);
+$config = \yii\helpers\BaseArrayHelper::merge($config, $commonConfig);
 
 if (YII_ENV_DEV) {
     if (class_exists('yii\\debug\\Module')) {

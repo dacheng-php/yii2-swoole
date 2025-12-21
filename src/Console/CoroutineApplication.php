@@ -6,6 +6,7 @@ namespace Dacheng\Yii2\Swoole\Console;
 
 use Swoole\Coroutine;
 use yii\console\Application;
+use Dacheng\Yii2\Swoole\Server\HttpServer;
 
 /**
  * Console Application with Swoole Coroutine support
@@ -137,5 +138,12 @@ class CoroutineApplication extends Application
         }
         
         return false;
+    }
+
+    public function coreComponents()
+    {
+        return array_merge(parent::coreComponents(), [
+            'swooleHttpServer' => ['class' => HttpServer::class],
+        ]);
     }
 }

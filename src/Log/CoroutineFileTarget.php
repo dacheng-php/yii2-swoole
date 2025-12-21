@@ -50,7 +50,8 @@ class CoroutineFileTarget extends Target
         parent::init();
 
         if ($this->logFile === null) {
-            $this->logFile = Yii::$app->getRuntimePath() . '/logs/app.log';
+            $applicationId = Yii::$app->request->getIsConsoleRequest()?'console':'app';
+            $this->logFile = Yii::$app->getRuntimePath() . '/logs/'.$applicationId.'.log';
         } else {
             $this->logFile = Yii::getAlias($this->logFile);
         }

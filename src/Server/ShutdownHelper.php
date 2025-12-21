@@ -33,6 +33,7 @@ class ShutdownHelper
      */
     public static function flushLogs(bool $verbose = true): void
     {
+        //todo "Error in shutdown callback 'flush_logs': Call to a member function has() on null" why???
         if (!Yii::$app->has('log')) {
             return;
         }
@@ -41,7 +42,8 @@ class ShutdownHelper
             // Step 1: Export any remaining messages from logger to targets
             $logger = Yii::$app->log->getLogger();
             if (!empty($logger->messages)) {
-                Yii::$app->log->flush(true);
+                //todo no defined function
+//                Yii::$app->log->flush(true);
                 
                 // Give a short time for messages to be processed
                 if (Coroutine::getCid() > 0) {

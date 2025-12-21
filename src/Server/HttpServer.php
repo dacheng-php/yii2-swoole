@@ -4,17 +4,19 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Server;
 
-use Dacheng\Yii2\Swoole\Db\CoroutineDbConnection;
-use Dacheng\Yii2\Swoole\Redis\CoroutineRedisConnection;
 use Swoole\Coroutine;
-use Swoole\Coroutine\Http\Server as SwooleCoroutineHttpServer;
+
+use Yii;
+use yii\di\Instance;
+use yii\base\Component;
 use Swoole\Http\Request;
 use Swoole\Http\Response;
-use yii\base\Component;
+use yii\base\BootstrapInterface;
 use yii\base\InvalidConfigException;
-use yii\di\Instance;
+use Dacheng\Yii2\Swoole\Console\SwooleController;
+use Swoole\Coroutine\Http\Server as SwooleCoroutineHttpServer;
 
-class HttpServer extends Component
+class HttpServer extends Component implements BootstrapInterface
 {
     public const EVENT_BEFORE_START = 'beforeStart';
 
@@ -43,7 +45,7 @@ class HttpServer extends Component
     /**
      * @var string|null Document root for static files (default: @webroot)
      */
-    public ?string $documentRoot = null;
+    public ?string $documentRoot = '@app/web';
 
     /**
      * @var array Static file extensions and their MIME types
@@ -71,6 +73,14 @@ class HttpServer extends Component
      */
     public ?string $serverHeader = null;
 
+    public string $memoryLimit = '512M';
+
+    /**
+     * @var array<string, string> Custom class map for overriding Yii2 core classes
+     * Example: ['yii\helpers\ArrayHelper' => '/path/to/custom/ArrayHelper.php']
+     */
+    public array $classMap = [];
+
     private ?SwooleCoroutineHttpServer $server = null;
 
     private bool $isRunning = false;
@@ -81,9 +91,80 @@ class HttpServer extends Component
 
     private ?string $realDocRoot = null;
 
+    /**
+     * getCommandId
+     * @return string
+     * @throws InvalidConfigException
+     */
+    protected function getCommandId()
+    {
+        foreach (Yii::$app->getComponents(false) as $id => $component) {
+            if ($component === $this) {
+                return $id;
+            }
+        }
+        throw new InvalidConfigException('Swoole Http Server must be an application component.');
+    }
+
+    /**
+     * bootstrap
+     * @param $app
+     * @throws InvalidConfigException
+     */
+    public function bootstrap($app): void
+    {
+        if ($memoryLimit = getenv('SWOOLE_MEMORY_LIMIT') ?: $this->memoryLimit) {
+            ini_set('memory_limit', $memoryLimit);
+        }
+
+        Yii::setAlias('@dacheng/swoole', dirname(__DIR__));
+
+        // Apply custom class map to override Yii2 core classes
+        if (!empty($this->classMap)) {
+            foreach ($this->classMap as $className => $classFile) {
+                // Resolve Yii aliases to actual paths
+                $resolvedPath = Yii::getAlias($classFile);
+                Yii::$classMap[$className] = $resolvedPath;
+            }
+        }
+
+        $componentId = $this->getCommandId();
+
+        if (!$app->has($componentId)) {
+            return;
+        }
+
+        $component = $app->get($componentId, false);
+        if (!$component instanceof HttpServer) {
+            throw new InvalidConfigException(sprintf(
+                'Component "%s" must be instance of %s, %s given.',
+                $componentId,
+                HttpServer::class,
+                is_object($component) ? get_class($component) : gettype($component)
+            ));
+        }
+
+        if ($app instanceof \yii\console\Application) {
+            $controllerMap = $app->controllerMap;
+            if (!isset($controllerMap['swoole'])) {
+                $app->controllerMap['swoole'] = [
+                    'class' => SwooleController::class,
+                    'serverComponent' => $componentId,
+                ];
+            }
+        }
+    }
+
     public function init(): void
     {
         parent::init();
+
+        $this->settings = array_merge($this->settings,[
+            'open_tcp_nodelay' => true,
+            'tcp_fastopen' => true,
+            'max_coroutine' => 100000,
+            'log_level' => YII_DEBUG ? SWOOLE_LOG_DEBUG : SWOOLE_LOG_WARNING,
+        ]);
 
         if (!isset($this->dispatcher)) {
             throw new InvalidConfigException('Property "dispatcher" must be set.');
@@ -103,6 +184,7 @@ class HttpServer extends Component
 
         // Pre-compute real document root path if static file serving is enabled
         if ($this->documentRoot !== null) {
+            $this->documentRoot = Yii::getAlias($this->documentRoot);
             $this->realDocRoot = realpath($this->documentRoot);
         }
     }
@@ -195,9 +277,10 @@ class HttpServer extends Component
                     if ($this->tryServeStaticFile($request, $response)) {
                         return;
                     }
-                    
+
                     $dispatcher->dispatch($request, $response, $server);
                 } catch (\Throwable $e) {
+                    Yii::error($e,'SwooleDispatchException');
                     if (method_exists($response, 'isWritable') && !$response->isWritable()) {
                         return;
                     }
@@ -222,6 +305,7 @@ class HttpServer extends Component
             }
             });
         } catch (\Swoole\ExitException $e) {
+            Yii::error($e,'SwooleExitException');
             // Swoole exit is expected during graceful shutdown
         }
     }

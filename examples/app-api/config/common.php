@@ -2,16 +2,8 @@
 
 return [
     'bootstrap' => [
-        [
-            'class' => \Dacheng\Yii2\Swoole\Bootstrap::class,
-            'componentId' => 'swooleHttpServer',
-            'memoryLimit' => '2G',
-            'hookFlags' => SWOOLE_HOOK_ALL,
-            'classMap' => [
-                'yii\helpers\ArrayHelper' => '@app/helpers/ArrayHelper.php',
-            ],
-        ],
         'queue',
+        'log'
     ],
     'components' => [
         'redis' => [
@@ -50,19 +42,24 @@ return [
             'schemaCacheDuration' => 3600,
             'schemaCache' => 'cache',
         ],
-        'swooleHttpServer' => [
-            'class' => \Dacheng\Yii2\Swoole\Server\HttpServer::class,
-            'host' => '127.0.0.1',
-            'port' => 9501,
-            'serverHeader' => 'yii2-swoole',
-            'documentRoot' => dirname(__DIR__) . '/web',
-            'settings' => [
-                'open_tcp_nodelay' => true,
-                'tcp_fastopen' => true,
-                'max_coroutine' => 100000,
-                'log_level' => YII_DEBUG ? SWOOLE_LOG_DEBUG : SWOOLE_LOG_WARNING,
+        'log' => [
+            'traceLevel' => YII_DEBUG ? 3 : 0,
+            'flushInterval' => 1,
+            'targets' => [
+                [
+                    'class' => \Dacheng\Yii2\Swoole\Log\CoroutineFileTarget::class,
+                    'levels' => YII_DEBUG ? ['error', 'warning', 'info'] : ['error', 'warning'],
+                    'exportInterval' => 1,
+                    'logFile' => '@runtime/logs/console.log',
+                    'maxFileSize' => 10240, // 10MB
+                    'maxLogFiles' => 5,
+                    'enableRotation' => true,
+                    'categories' => [],
+                    'except' => [],
+                    'logVars' => [],
+                    'microtime' => true,
+                ],
             ],
-            'dispatcher' => new \Dacheng\Yii2\Swoole\Server\RequestDispatcher(__DIR__ . '/web.php'),
         ],
     ],
 ];
