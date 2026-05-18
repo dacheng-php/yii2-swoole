@@ -9,10 +9,10 @@ use yii\log\Target;
 
 /**
  * CoroutineFileTarget writes log messages asynchronously using a buffer-based worker.
- * 
+ *
  * Messages are pushed directly to a LogWorker's internal buffer, which periodically
  * flushes them to disk. This avoids blocking I/O operations in the main request flow.
- * 
+ *
  * Example configuration:
  * ```php
  * 'log' => [
@@ -85,7 +85,7 @@ class CoroutineFileTarget extends Target
         }
 
         $inCoroutine = extension_loaded('swoole') && \Swoole\Coroutine::getCid() > 0;
-        
+
         if ($this->isShuttingDown || !$inCoroutine) {
             $this->exportSync();
             $this->messages = [];
@@ -103,7 +103,7 @@ class CoroutineFileTarget extends Target
 
         try {
             $pushed = $this->worker->pushMessages($formattedMessages);
-            
+
             if (!$pushed) {
                 $this->writeFormattedMessages($formattedMessages);
             }
@@ -123,7 +123,7 @@ class CoroutineFileTarget extends Target
         $formattedMessages = array_map([$this, 'formatMessage'], $this->messages);
         $this->writeFormattedMessages($formattedMessages);
     }
-    
+
     private function writeFormattedMessages(array $formattedMessages): void
     {
         if (empty($formattedMessages)) {
@@ -144,12 +144,12 @@ class CoroutineFileTarget extends Target
         }
 
         @flock($fp, LOCK_EX);
-        
+
         if ($this->enableRotation && @filesize($this->logFile) > $this->maxFileSize * 1024) {
             @flock($fp, LOCK_UN);
             @fclose($fp);
             $this->rotateFilesSync();
-            
+
             if (($fp = @fopen($this->logFile, 'a')) === false) {
                 // Use error_log here to avoid recursion in logging system
                 error_log("Unable to reopen log file after rotation: {$this->logFile}");
@@ -170,27 +170,7 @@ class CoroutineFileTarget extends Target
 
     private function rotateFilesSync(): void
     {
-        $file = $this->logFile;
-        for ($i = $this->maxLogFiles; $i >= 0; --$i) {
-            $rotateFile = $file . ($i === 0 ? '' : '.' . $i);
-            if (is_file($rotateFile)) {
-                if ($i === $this->maxLogFiles) {
-                    @unlink($rotateFile);
-                    continue;
-                }
-                $newFile = $this->logFile . '.' . ($i + 1);
-                @copy($rotateFile, $newFile);
-                if ($this->fileMode !== null) {
-                    @chmod($newFile, $this->fileMode);
-                }
-                if ($i === 0) {
-                    if ($fp = @fopen($rotateFile, 'a')) {
-                        @ftruncate($fp, 0);
-                        @fclose($fp);
-                    }
-                }
-            }
-        }
+        LogFileRotator::rotate($this->logFile, $this->maxLogFiles, $this->fileMode);
     }
 
     public function shutdown(): void

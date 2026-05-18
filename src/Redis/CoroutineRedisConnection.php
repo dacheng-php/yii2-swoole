@@ -4,60 +4,53 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Redis;
 
+use Dacheng\Yii2\Swoole\Pools\PoolManager;
+use Dacheng\Yii2\Swoole\Pools\RedisConnectionPool;
 use Swoole\Coroutine;
-use Swoole\Coroutine\Channel;
 use yii\redis\Connection as BaseRedisConnection;
+use yii\redis\Exception;
 use yii\redis\SocketException;
 
 /**
  * CoroutineRedisConnection provides connection pooling for Redis in Swoole coroutine context.
- * 
- * It extends yii2-redis Connection and manages a pool of socket connections that are shared
- * across coroutines. The implementation works by:
- * 
- * 1. Acquiring a socket from the coroutine pool on open()
- * 2. Injecting it into the base class's internal _pool array
- * 3. Returning it to the pool on close()
- * 
- * This approach ensures compatibility with all base class methods while providing
- * efficient connection pooling in coroutine environments.
+ *
+ * This class extends yii2-redis Connection and manages a pool of socket connections that are
+ * shared across coroutines. Unlike the previous implementation that used reflection to inject
+ * sockets into the parent's private _pool array, this implementation manages sockets directly
+ * by overriding getSocket() and related methods.
+ *
+ * Key design decisions:
+ * 1. Override getSocket() to return our managed socket - all parent methods use $this->socket
+ * 2. Override getIsActive() to check our managed socket state
+ * 3. No reflection - direct socket management for better performance and maintainability
+ * 4. AUTH/SELECT performed once during pool creation, not on every acquire
+ *
+ * @property-read RedisConnectionPool $pool The connection pool instance
  */
 class CoroutineRedisConnection extends BaseRedisConnection
 {
-    /**
-     * @var int Maximum number of connections in the pool
-     */
-    public int $poolMaxActive = 32;
+    use PoolManager;
 
     /**
-     * @var float Maximum time to wait for an available connection (seconds)
+     * Maximum number of connections in the pool.
+     */
+    public int $poolMaxActive = 20;
+
+    /**
+     * Maximum time to wait for an available connection (in seconds).
      */
     public float $poolWaitTimeout = 3.0;
 
     /**
-     * @var bool Whether to enable connection pooling in coroutine context
+     * Whether to enable connection pooling in coroutine context.
      */
     public bool $enableCoroutinePooling = true;
 
     /**
-     * @var array<string, CoroutineRedisConnectionPool> Shared pools indexed by connection key
+     * @var bool Whether to validate connections on acquire from pool
+     * When enabled, the pool will verify connection health before returning it.
      */
-    private static array $sharedPools = [];
-
-    /**
-     * @var array<string, Channel> Locks to serialize pool initialization per key
-     */
-    private static array $poolLocks = [];
-
-    /**
-     * @var bool Whether shutdown function has been registered
-     */
-    private static bool $shutdownRegistered = false;
-
-    /**
-     * @var string|null Cache of the pool key for this connection
-     */
-    private ?string $poolKey = null;
+    public bool $enableHealthCheck = false;
 
     /**
      * @var resource|null The current socket resource from the pool
@@ -75,23 +68,46 @@ class CoroutineRedisConnection extends BaseRedisConnection
     private bool $released = false;
 
     /**
-     * @var \ReflectionProperty|null Cached reflection property for accessing parent's _pool
+     * Returns the socket connection resource.
+     *
+     * This method is called by parent class when accessing $this->socket.
+     * By overriding this method, we can provide our own managed socket
+     * without needing to inject into parent's private _pool array.
+     *
+     * @return resource|false The socket resource or false if not connected
      */
-    private static ?\ReflectionProperty $poolProperty = null;
+    public function getSocket()
+    {
+        if ($this->currentSocket !== null && !$this->released) {
+            return $this->currentSocket;
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns whether the Redis connection is established.
+     *
+     * @return bool Whether the Redis connection is established
+     */
+    public function getIsActive(): bool
+    {
+        return $this->currentSocket !== null && !$this->released && !$this->currentSocketFailed;
+    }
 
     /**
      * Opens the Redis connection.
-     * 
+     *
      * If pooling is enabled and we're in a coroutine context, acquires a socket from the pool.
      * Otherwise falls back to the parent implementation.
      */
     public function open(): void
     {
-        if ($this->socket !== false) {
+        if ($this->getSocket() !== false) {
             return;
         }
 
-        if (!$this->isPoolingEnabled()) {
+        if (!$this->enableCoroutinePooling || Coroutine::getCid() < 0) {
             parent::open();
             return;
         }
@@ -102,21 +118,24 @@ class CoroutineRedisConnection extends BaseRedisConnection
         $this->currentSocketFailed = false;
         $this->released = false;
 
-        // Inject into base class's _pool array so all base class methods work
-        $this->setPoolSocket($socket);
-
-        // Initialize connection (AUTH, SELECT, etc)
-        $this->initializeConnection();
+        // Trigger application-level init hook
+        // Note: AUTH/SELECT already done during pool creation
+        try {
+            $this->initConnection();
+        } catch (\Throwable $e) {
+            $this->close();
+            throw $e;
+        }
     }
 
     /**
      * Closes the Redis connection.
-     * 
+     *
      * If pooling is enabled, returns the socket to the pool instead of closing it.
      */
     public function close(): void
     {
-        if (!$this->isPoolingEnabled()) {
+        if (!$this->enableCoroutinePooling || Coroutine::getCid() < 0) {
             parent::close();
             return;
         }
@@ -131,9 +150,6 @@ class CoroutineRedisConnection extends BaseRedisConnection
         $this->currentSocket = null;
         $this->currentSocketFailed = false;
         $this->released = true;
-
-        // Remove from base class's _pool array
-        $this->clearPoolSocket();
 
         // Return to coroutine pool or discard on failure
         if ($failed) {
@@ -153,86 +169,36 @@ class CoroutineRedisConnection extends BaseRedisConnection
 
     /**
      * Returns the connection pool instance.
+     *
+     * @return RedisConnectionPool
      */
-    public function getPool(): CoroutineRedisConnectionPool
+    public function getPool(): RedisConnectionPool
     {
         return $this->ensurePool();
     }
 
     /**
-     * Returns statistics about the connection pool.
-     * 
-     * @return array{created: int, idle: int, in_use: int, waiters: int, capacity: int}
-     */
-    public function getPoolStats(): array
-    {
-        return $this->ensurePool()->getStats();
-    }
-
-    /**
      * Acquires a socket from the coroutine pool.
-     * Validates the socket and retries if it's no longer alive.
-     * 
+     *
      * @return resource
      */
     private function acquireSocket()
     {
         $pool = $this->ensurePool();
-        $socket = $pool->acquire();
-        
-        // Fast path: assume socket is alive (most common case)
-        // Failures are detected lazily during command execution
-        return $socket;
+        return $pool->acquire();
     }
 
     /**
      * Returns a socket back to the coroutine pool.
-     * 
+     *
      * @param resource $socket
      */
     private function releaseSocket($socket): void
     {
-        // Fast path: assume socket is healthy
-        // Dead sockets will be detected on next acquire
         $this->ensurePool()->release($socket);
     }
 
-    /**
-     * Gets or creates the connection pool for this configuration.
-     */
-    private function ensurePool(): CoroutineRedisConnectionPool
-    {
-        $key = $this->poolKey ??= $this->buildPoolKey();
-
-        // Register shutdown function on first pool creation as a safety net
-        if (!self::$shutdownRegistered) {
-            self::registerShutdownHandler();
-        }
-
-        if (!isset(self::$sharedPools[$key])) {
-            $lock = self::$poolLocks[$key] ??= $this->createPoolLock();
-            $token = $lock->pop();
-
-            try {
-                if (!isset(self::$sharedPools[$key])) {
-                    self::$sharedPools[$key] = new CoroutineRedisConnectionPool(
-                        fn() => $this->createSocketForPool(),
-                        $this->poolMaxActive,
-                        $this->poolWaitTimeout
-                    );
-                }
-            } finally {
-                $lock->push($token);
-            }
-        }
-
-        return self::$sharedPools[$key];
-    }
-
-    /**
-     * Builds a unique key for the connection pool based on connection parameters.
-     */
-    private function buildPoolKey(): string
+    protected function buildPoolKey(): string
     {
         return md5(implode('|', [
             static::class,
@@ -244,30 +210,30 @@ class CoroutineRedisConnection extends BaseRedisConnection
         ]));
     }
 
-    /**
-     * Checks if connection pooling should be enabled.
-     */
-    private function isPoolingEnabled(): bool
+    protected function createPool(): RedisConnectionPool
     {
-        return $this->enableCoroutinePooling && Coroutine::getCid() >= 0;
+        return new RedisConnectionPool(
+            fn() => $this->createSocketForPool(),
+            $this->poolMaxActive,
+            $this->poolWaitTimeout,
+            $this->enableHealthCheck
+        );
     }
 
-    private function createPoolLock(): Channel
+    protected static function getPoolClass(): string
     {
-        $lock = new Channel(1);
-        $lock->push(true);
-
-        return $lock;
+        return RedisConnectionPool::class;
     }
 
     /**
      * Creates a new socket for the pool.
      * This is called by the pool when it needs to create new connections.
-     * 
+     *
      * IMPORTANT: AUTH and SELECT are performed HERE during socket creation,
      * not on every acquire. This is a critical performance optimization.
-     * 
+     *
      * @return resource
+     * @throws SocketException If connection fails
      */
     private function createSocketForPool()
     {
@@ -284,10 +250,10 @@ class CoroutineRedisConnection extends BaseRedisConnection
         );
 
         if (!is_resource($socket)) {
-            \Yii::error("Failed to create redis socket ($connection): $errorNumber - $errorDescription", __CLASS__);
-            $message = YII_DEBUG 
-                ? "Failed to create redis socket ($connection): $errorNumber - $errorDescription" 
+            $message = YII_DEBUG
+                ? "Failed to create redis socket ($connection): $errorNumber - $errorDescription"
                 : 'Failed to create redis connection.';
+            \Yii::error("Failed to create redis socket ($connection): $errorNumber - $errorDescription", __CLASS__);
             throw new SocketException($message, $errorNumber);
         }
 
@@ -303,8 +269,7 @@ class CoroutineRedisConnection extends BaseRedisConnection
             stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
         }
 
-        // Perform AUTH and SELECT during socket creation (PERFORMANCE CRITICAL)
-        // This way we don't repeat these commands on every acquire
+        // AUTH and SELECT run once per pooled socket, not on every acquire.
         $this->authenticateSocket($socket);
 
         return $socket;
@@ -312,103 +277,126 @@ class CoroutineRedisConnection extends BaseRedisConnection
 
     /**
      * Authenticates a socket during creation.
-     * This is done once per socket, not on every acquire.
-     * 
-     * @param resource $socket
+     *
+     * This method sends raw Redis commands directly to the socket without
+     * relying on parent class methods. This avoids the need for reflection
+     * while still performing authentication during pool creation.
+     *
+     * @param resource $socket The socket resource to authenticate
+     * @return void
+     * @throws SocketException If authentication fails
      */
     private function authenticateSocket($socket): void
     {
-        // Temporarily inject socket into _pool for executeCommand to work
-        $property = self::getPoolProperty();
-        $pool = $property->getValue($this);
-        $oldSocket = $pool[$this->connectionString] ?? null;
-        $pool[$this->connectionString] = $socket;
-        $property->setValue($this, $pool);
+        if ($this->password !== null) {
+            $params = array_filter([$this->username, $this->password]);
+            $this->sendRawCommandToSocket($socket, 'AUTH', $params);
+        }
 
-        $previousSocket = $this->currentSocket;
-        $previousFailed = $this->currentSocketFailed;
-        $previousReleased = $this->released;
-
-        $this->currentSocket = $socket;
-        $this->currentSocketFailed = false;
-        $this->released = false;
-
-        try {
-            if ($this->password !== null) {
-                $this->executeCommand('AUTH', array_filter([$this->username, $this->password]));
-            }
-
-            if ($this->database !== null) {
-                $this->executeCommand('SELECT', [$this->database]);
-            }
-        } finally {
-            // Restore original state
-            $pool = $property->getValue($this);
-            if ($oldSocket !== null) {
-                $pool[$this->connectionString] = $oldSocket;
-            } else {
-                unset($pool[$this->connectionString]);
-            }
-            $property->setValue($this, $pool);
-
-            $this->currentSocket = $previousSocket;
-            $this->currentSocketFailed = $previousFailed;
-            $this->released = $previousReleased;
+        if ($this->database !== null) {
+            $this->sendRawCommandToSocket($socket, 'SELECT', [$this->database]);
         }
     }
 
     /**
-     * Initializes the connection after acquiring a socket from the pool.
-     * Performs AUTH and SELECT commands if configured.
-     * 
-     * Note: For pooled connections, AUTH/SELECT are done once during socket creation,
-     * not on every acquire. This is a major performance optimization.
+     * Sends a raw Redis command directly to a specific socket.
+     *
+     * This method is used during socket authentication when we need to send
+     * commands to a newly created socket before it's set as the current socket.
+     * It bypasses the parent class entirely, avoiding the need for reflection.
+     *
+     * @param resource $socket The socket to send the command to
+     * @param string $name The command name
+     * @param array $params The command parameters
+     * @return mixed The command response
+     * @throws SocketException If communication fails
+     * @throws Exception If Redis returns an error
      */
-    private function initializeConnection(): void
+    private function sendRawCommandToSocket($socket, string $name, array $params = [])
     {
-        try {
-            // For pooled connections, initialization was already done in createSocketForPool
-            // Just trigger the application-level init hook
-            $this->initConnection();
-        } catch (\Throwable $e) {
-            // If initialization fails, close and rethrow
-            $this->close();
-            throw $e;
+        $params = array_merge(explode(' ', $name), $params);
+        $command = '*' . count($params) . "\r\n";
+        foreach ($params as $arg) {
+            $arg = (string) ($arg ?? '');
+            $command .= '$' . mb_strlen($arg, '8bit') . "\r\n" . $arg . "\r\n";
+        }
+
+        \Yii::trace("Executing Redis Command during auth: {$name}", __METHOD__);
+
+        $written = @fwrite($socket, $command);
+        if ($written === false) {
+            throw new SocketException("Failed to write to socket during auth.\nRedis command was: " . $command);
+        }
+        if ($written !== ($len = mb_strlen($command, '8bit'))) {
+            throw new SocketException("Failed to write to socket during auth. $written of $len bytes written.");
+        }
+
+        return $this->parseResponseFromSocket($socket, $params);
+    }
+
+    /**
+     * Parses a Redis response from a specific socket.
+     *
+     * @param resource $socket The socket to read from
+     * @param array $params The command parameters for error messages
+     * @return mixed The parsed response
+     * @throws SocketException If reading fails
+     * @throws Exception If Redis returns an error
+     */
+    private function parseResponseFromSocket($socket, array $params)
+    {
+        if (($line = fgets($socket)) === false) {
+            throw new SocketException("Failed to read from socket during auth.\nRedis command was: " . implode(' ', $params));
+        }
+
+        $type = $line[0];
+        $line = mb_substr($line, 1, -2, '8bit');
+
+        switch ($type) {
+            case '+': // Status reply
+                if ($line === 'OK' || $line === 'PONG') {
+                    return true;
+                }
+                return $line;
+
+            case '-': // Error reply
+                throw new Exception("Redis error during auth: " . $line . "\nRedis command was: " . implode(' ', $params));
+
+            case ':': // Integer reply
+                return $line;
+
+            case '$': // Bulk replies
+                if ($line == '-1') {
+                    return null;
+                }
+                $length = (int)$line + 2;
+                $data = '';
+                while ($length > 0) {
+                    if (($block = fread($socket, $length)) === false) {
+                        throw new SocketException("Failed to read from socket during auth.\nRedis command was: " . implode(' ', $params));
+                    }
+                    $data .= $block;
+                    $length -= mb_strlen($block, '8bit');
+                }
+                return mb_substr($data, 0, -2, '8bit');
+
+            case '*': // Multi-bulk replies
+                $count = (int)$line;
+                $data = [];
+                for ($i = 0; $i < $count; $i++) {
+                    $data[] = $this->parseResponseFromSocket($socket, $params);
+                }
+                return $data;
+
+            default:
+                throw new Exception('Received illegal data from redis during auth: ' . $line);
         }
     }
 
     /**
-     * Checks if a socket is still alive and usable.
-     * 
-     * @param resource $socket
-     * @return bool
+     * Marks the current socket as failed.
+     * Called when a socket error occurs during command execution.
      */
-    private function isSocketAlive($socket): bool
-    {
-        if (!is_resource($socket) || get_resource_type($socket) !== 'stream') {
-            return false;
-        }
-
-        $meta = stream_get_meta_data($socket);
-        return !($meta['eof'] ?? true);
-    }
-
-    /**
-     * Destroys a socket by closing it.
-     * 
-     * @param resource $socket
-     */
-    private function destroySocket($socket): void
-    {
-        if (is_resource($socket) && get_resource_type($socket) === 'stream') {
-            try {
-                @fclose($socket);
-            } catch (\Throwable $e) {
-                // Ignore errors during socket destruction
-            }
-        }
-    }
-
     private function markCurrentSocketAsFailed(): void
     {
         if ($this->currentSocket !== null) {
@@ -416,6 +404,17 @@ class CoroutineRedisConnection extends BaseRedisConnection
         }
     }
 
+    /**
+     * Sends a raw command to the server.
+     *
+     * Overridden to capture socket errors and mark the socket as failed,
+     * ensuring it gets discarded when returned to the pool.
+     *
+     * @param string $command The command string
+     * @param array $params The command parameters
+     * @return mixed The response
+     * @throws SocketException If communication fails
+     */
     protected function sendRawCommand($command, $params)
     {
         try {
@@ -424,100 +423,5 @@ class CoroutineRedisConnection extends BaseRedisConnection
             $this->markCurrentSocketAsFailed();
             throw $exception;
         }
-    }
-
-    /**
-     * Gets the cached reflection property for the parent's _pool array.
-     * 
-     * @return \ReflectionProperty
-     */
-    private static function getPoolProperty(): \ReflectionProperty
-    {
-        if (self::$poolProperty === null) {
-            self::$poolProperty = (new \ReflectionClass(BaseRedisConnection::class))->getProperty('_pool');
-            self::$poolProperty->setAccessible(true);
-        }
-        return self::$poolProperty;
-    }
-
-    /**
-     * Injects a socket into the base class's internal _pool array.
-     * This makes all base class methods work with our pooled socket.
-     * 
-     * @param resource $socket
-     */
-    private function setPoolSocket($socket): void
-    {
-        $property = self::getPoolProperty();
-        $pool = $property->getValue($this);
-        $pool[$this->connectionString] = $socket;
-        $property->setValue($this, $pool);
-    }
-
-    /**
-     * Removes the socket from the base class's internal _pool array.
-     */
-    private function clearPoolSocket(): void
-    {
-        $property = self::getPoolProperty();
-        $pool = $property->getValue($this);
-        unset($pool[$this->connectionString]);
-        $property->setValue($this, $pool);
-    }
-
-    /**
-     * Shuts down all connection pools
-     * This should be called during application shutdown
-     */
-    public static function shutdownAllPools(): void
-    {
-        // Shutdown all pools
-        foreach (self::$sharedPools as $pool) {
-            try {
-                $pool->shutdown();
-            } catch (\Throwable $e) {
-                // Silently handle shutdown errors
-            }
-        }
-        
-        // Close and clear all pool locks
-        foreach (self::$poolLocks as $lock) {
-            try {
-                if ($lock instanceof Channel) {
-                    $lock->close();
-                }
-            } catch (\Throwable $e) {
-                // Silently handle lock close errors (channel may already be closed)
-            }
-        }
-        
-        self::$sharedPools = [];
-        self::$poolLocks = [];
-    }
-
-    /**
-     * Registers a PHP shutdown function as a safety net to ensure pools are cleaned up
-     * even if normal shutdown sequence fails (e.g., fatal error, crash)
-     */
-    private static function registerShutdownHandler(): void
-    {
-        if (self::$shutdownRegistered) {
-            return;
-        }
-
-        self::$shutdownRegistered = true;
-
-        register_shutdown_function(function (): void {
-            // Only cleanup if pools/locks still exist
-            // This prevents double cleanup during normal shutdown
-            if (!empty(self::$sharedPools) || !empty(self::$poolLocks)) {
-                try {
-                    self::shutdownAllPools();
-                } catch (\Throwable $e) {
-                    // Use error_log here to avoid dependency on Yii during shutdown
-                    error_log('[CoroutineRedisConnection] Error in shutdown handler: ' . $e->getMessage());
-                }
-            }
-        });
     }
 }

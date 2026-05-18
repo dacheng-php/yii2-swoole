@@ -10,7 +10,7 @@ use yii\queue\cli\Queue;
 
 /**
  * Simple Loop implementation for Coroutine Queue.
- * 
+ *
  * Unlike SignalLoop, this loop does not handle signals itself.
  * Signal handling is done by CoroutineRedisCommand using Swoole's Process::signal().
  * This avoids conflicts between pcntl_signal() and Process::signal().
@@ -21,11 +21,11 @@ class CoroutineLoop extends BaseObject implements LoopInterface
      * @var Queue
      */
     protected $queue;
-    
+
     /**
-     * @var bool Whether the loop should continue
+     * @var bool Whether the loop should continue (instance-level for coroutine safety)
      */
-    private static $shouldContinue = true;
+    private bool $shouldContinue = true;
 
     /**
      * @param Queue $queue
@@ -36,21 +36,21 @@ class CoroutineLoop extends BaseObject implements LoopInterface
         $this->queue = $queue;
         parent::__construct($config);
     }
-    
+
     /**
      * Stops the loop
      */
-    public static function stop(): void
+    public function stop(): void
     {
-        self::$shouldContinue = false;
+        $this->shouldContinue = false;
     }
-    
+
     /**
      * Resets the loop state (for testing)
      */
-    public static function reset(): void
+    public function resetState(): void
     {
-        self::$shouldContinue = true;
+        $this->shouldContinue = true;
     }
 
     /**
@@ -58,8 +58,7 @@ class CoroutineLoop extends BaseObject implements LoopInterface
      */
     public function canContinue()
     {
-        // Check static flag set by external signal handlers
-        return self::$shouldContinue;
+        return $this->shouldContinue;
     }
 }
 

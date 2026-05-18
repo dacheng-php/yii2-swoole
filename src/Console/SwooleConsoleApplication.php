@@ -9,25 +9,25 @@ use yii\console\Application;
 
 /**
  * Console Application with Swoole Coroutine support
- * 
+ *
  * This class wraps the standard console application to run inside a Swoole
  * coroutine environment, enabling async I/O operations for console commands.
- * 
+ *
  * Benefits:
  * - Non-blocking database queries
  * - Concurrent Redis/cache operations
  * - Parallel HTTP/API calls
  * - Better performance for I/O-bound tasks
- * 
+ *
  * Example usage in console entry script:
  * ```php
  * $config = require __DIR__ . '/config/console.php';
- * $application = new CoroutineApplication($config);
+ * $application = new SwooleConsoleApplication($config);
  * $exitCode = $application->run();
  * exit($exitCode);
  * ```
  */
-class CoroutineApplication extends Application
+class SwooleConsoleApplication extends Application
 {
     /**
      * @var int Swoole coroutine hook flags
@@ -87,11 +87,12 @@ class CoroutineApplication extends Application
 
         // Run inside a new coroutine environment
         $exitCode = 0;
-        
+
+        // Enable coroutine hooks BEFORE starting the coroutine runtime
+        // Note: Coroutine::set() must be called before Coroutine\run() to take effect
+        Coroutine::set(['hook_flags' => $this->hookFlags]);
+
         Coroutine\run(function () use (&$exitCode) {
-            // Enable coroutine hooks for blocking I/O functions
-            Coroutine::set(['hook_flags' => $this->hookFlags]);
-            
             $this->isCoroutineActive = true;
             $exitCode = parent::run();
         });

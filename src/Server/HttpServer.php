@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Server;
 
-use Dacheng\Yii2\Swoole\Db\CoroutineDbConnection;
-use Dacheng\Yii2\Swoole\Redis\CoroutineRedisConnection;
+use Swoole\Atomic;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Http\Server as SwooleCoroutineHttpServer;
 use Swoole\Http\Request;
@@ -24,6 +23,16 @@ class HttpServer extends Component
 
     public const EVENT_AFTER_STOP = 'afterStop';
 
+    /**
+     * @var StaticFileServer|null Static file server instance
+     */
+    private ?StaticFileServer $staticFileServer = null;
+
+    /**
+     * @var bool Whether to enable request tracking for debugging
+     */
+    public bool $enableRequestTracking = false;
+
     public string $host = '127.0.0.1';
 
     public int $port = 9501;
@@ -41,30 +50,17 @@ class HttpServer extends Component
     public $serverFactory;
 
     /**
-     * @var string|null Document root for static files (default: @webroot)
+     * @var string|null Document root for static files
      */
     public ?string $documentRoot = null;
 
     /**
      * @var array Static file extensions and their MIME types
+     *
+     * Leave empty to use StaticFileServer defaults (common web file types).
+     * @see StaticFileServer::DEFAULT_MIME_TYPES
      */
-    public array $staticFileExtensions = [
-        'css' => 'text/css',
-        'js' => 'application/javascript',
-        'json' => 'application/json',
-        'xml' => 'application/xml',
-        'map' => 'application/json',
-        'jpg' => 'image/jpeg',
-        'jpeg' => 'image/jpeg',
-        'png' => 'image/png',
-        'gif' => 'image/gif',
-        'svg' => 'image/svg+xml',
-        'ico' => 'image/x-icon',
-        'woff' => 'font/woff',
-        'woff2' => 'font/woff2',
-        'ttf' => 'font/ttf',
-        'eot' => 'application/vnd.ms-fontobject',
-    ];
+    public array $staticFileExtensions = [];
 
     /**
      * @var string|null Custom server header value (default: null to use Swoole's default)
@@ -77,9 +73,10 @@ class HttpServer extends Component
 
     private ?SignalHandler $signalHandler = null;
 
-    private int $activeRequests = 0;
-
-    private ?string $realDocRoot = null;
+    /**
+     * @var Atomic Coroutine-safe active request counter
+     */
+    private ?Atomic $activeRequests = null;
 
     public function init(): void
     {
@@ -101,9 +98,12 @@ class HttpServer extends Component
             throw new InvalidConfigException('Property "serverFactory" must be a valid callable.');
         }
 
-        // Pre-compute real document root path if static file serving is enabled
+        // Initialize static file server if document root is configured
         if ($this->documentRoot !== null) {
-            $this->realDocRoot = realpath($this->documentRoot);
+            $this->staticFileServer = new StaticFileServer(
+                $this->documentRoot,
+                empty($this->staticFileExtensions) ? StaticFileServer::DEFAULT_MIME_TYPES : $this->staticFileExtensions
+            );
         }
     }
 
@@ -145,6 +145,9 @@ class HttpServer extends Component
 
         $this->isRunning = true;
 
+        // Initialize coroutine-safe atomic counter
+        $this->activeRequests = new Atomic(0);
+
         // Initialize signal handler
         $this->signalHandler = new SignalHandler();
         $this->setupShutdownCallbacks();
@@ -152,77 +155,51 @@ class HttpServer extends Component
 
         try {
             Coroutine\run(function () use ($factory, $host, $port, $settings, $dispatcher, $afterStartEvent, $afterStopEvent): void {
-            $this->server = $factory($host, $port);
+                $this->server = $factory($host, $port);
+                $this->applyCoroutineServerSettings($settings);
 
-            // Apply relevant settings for coroutine server
-            $coroutineSettings = [];
-            if (isset($settings['backlog'])) {
-                $coroutineSettings['backlog'] = $settings['backlog'];
-            }
-            if (isset($settings['open_tcp_nodelay'])) {
-                $coroutineSettings['open_tcp_nodelay'] = $settings['open_tcp_nodelay'];
-            }
-            if (isset($settings['tcp_fastopen'])) {
-                $coroutineSettings['open_tcp_fastopen'] = $settings['tcp_fastopen'];
-            }
-            if (!empty($coroutineSettings)) {
-                $this->server->set($coroutineSettings);
-            }
+                $server = $this->server;
+                $afterStartEvent();
 
-            $server = $this->server;
+                $this->server->handle('/', function (Request $request, Response $response) use ($dispatcher, $server): void {
+                    $this->handleRequest($request, $response, $dispatcher, $server);
+                });
 
-            $afterStartEvent();
-
-            $this->server->handle('/', function (Request $request, Response $response) use ($dispatcher, $server): void {
-                // Set custom server header if configured
-                if ($this->serverHeader !== null) {
-                    $response->header('Server', $this->serverHeader);
-                }
-
-                // Check if shutdown is requested
-                if ($this->signalHandler && $this->signalHandler->isShutdownRequested()) {
-                    $response->status(503);
-                    $response->header('Content-Type', 'text/plain; charset=UTF-8');
-                    $response->end('Server is shutting down');
-                    return;
-                }
-
-                // Track active requests
-                $this->activeRequests++;
-                
                 try {
-                    // Try to serve static files first
-                    if ($this->tryServeStaticFile($request, $response)) {
-                        return;
-                    }
-                    
-                    $dispatcher->dispatch($request, $response, $server);
-                } catch (\Throwable $e) {
-                    if (method_exists($response, 'isWritable') && !$response->isWritable()) {
-                        return;
-                    }
-
-                    $response->status(500);
-                    $response->header('Content-Type', 'text/plain; charset=UTF-8');
-                    $body = defined('YII_DEBUG') && YII_DEBUG ? (string) $e : 'Internal Server Error';
-                    $response->end($body);
+                    $this->server->start();
                 } finally {
-                    $this->activeRequests--;
+                    if ($this->signalHandler !== null) {
+                        $this->signalHandler->unregister();
+                    }
+                    $afterStopEvent();
                 }
-            });
-
-            try {
-                $this->server->start();
-            } finally {
-                // Cleanup signal handler
-                if ($this->signalHandler) {
-                    $this->signalHandler->unregister();
-                }
-                $afterStopEvent();
-            }
             });
         } catch (\Swoole\ExitException $e) {
             // Swoole exit is expected during graceful shutdown
+        }
+    }
+
+    /**
+     * Applies settings supported by Swoole coroutine HTTP server.
+     *
+     * @param array<string, mixed> $settings
+     */
+    private function applyCoroutineServerSettings(array $settings): void
+    {
+        $coroutineSettings = [];
+
+        if (isset($settings['backlog'])) {
+            $coroutineSettings['backlog'] = $settings['backlog'];
+        }
+        if (isset($settings['open_tcp_nodelay'])) {
+            $coroutineSettings['open_tcp_nodelay'] = $settings['open_tcp_nodelay'];
+        }
+        if (isset($settings['tcp_fastopen'])) {
+            $coroutineSettings['open_tcp_fastopen'] = $settings['tcp_fastopen'];
+        }
+
+        if ($coroutineSettings !== []) {
+            $this->server->set($coroutineSettings);
         }
     }
 
@@ -238,7 +215,7 @@ class HttpServer extends Component
         // Priority 10: Wait for in-flight requests
         $this->signalHandler->onShutdown('wait_requests', function () {
             $this->signalHandler->waitForInflightRequests(
-                fn() => $this->activeRequests > 0,
+                fn() => $this->activeRequests !== null && $this->activeRequests->get() > 0,
                 5.0
             );
         }, 10);
@@ -278,105 +255,129 @@ class HttpServer extends Component
     }
 
     /**
-     * Try to serve static file if the request matches a static file extension
+     * Handles a single HTTP request.
      *
-     * @param Request $request
-     * @param Response $response
-     * @return bool True if static file was served, false otherwise
+     * This method processes each incoming request through the following steps:
+     * 1. Set custom server header (if configured)
+     * 2. Check for shutdown request
+     * 3. Initialize request context for debugging
+     * 4. Track active request count
+     * 5. Serve static files or dispatch to Yii2
+     * 6. Handle errors and cleanup
+     *
+     * @param Request $request The Swoole HTTP request
+     * @param Response $response The Swoole HTTP response
+     * @param RequestDispatcherInterface $dispatcher The request dispatcher
+     * @param SwooleCoroutineHttpServer $server The server instance
      */
-    private function tryServeStaticFile(Request $request, Response $response): bool
+    private function handleRequest(
+        Request $request,
+        Response $response,
+        RequestDispatcherInterface $dispatcher,
+        SwooleCoroutineHttpServer $server
+    ): void {
+        // Set custom server header if configured
+        if ($this->serverHeader !== null) {
+            $response->header('Server', $this->serverHeader);
+        }
+
+        // Check if shutdown is requested
+        if ($this->signalHandler && $this->signalHandler->isShutdownRequested()) {
+            $response->status(503);
+            $response->header('Content-Type', 'text/plain; charset=UTF-8');
+            $response->end('Server is shutting down');
+            return;
+        }
+
+        // Initialize request context for debugging
+        $requestId = $this->initializeRequestContext($request);
+
+        // Track active requests (coroutine-safe)
+        $this->activeRequests?->add(1);
+
+        try {
+            // Try to serve static files first using dedicated static file server
+            if ($this->staticFileServer !== null && $this->staticFileServer->serve($request, $response)) {
+                return;
+            }
+
+            // Process through middleware pipeline, then dispatch to Yii2
+            $dispatcher->dispatch($request, $response, $server);
+        } catch (\Throwable $e) {
+            if (method_exists($response, 'isWritable') && !$response->isWritable()) {
+                return;
+            }
+
+            $response->status(500);
+            $response->header('Content-Type', 'text/plain; charset=UTF-8');
+            $body = $this->formatErrorResponse($e, $requestId);
+            $response->end($body);
+        } finally {
+            $this->activeRequests?->sub(1);
+            $this->cleanupRequestContext();
+        }
+    }
+
+    /**
+     * Initializes request context for debugging.
+     *
+     * @param Request $request The HTTP request
+     * @return string The request ID
+     */
+    private function initializeRequestContext(Request $request): string
     {
-        // Skip static file serving if documentRoot is not configured
-        if ($this->documentRoot === null) {
-            return false;
+        if (!$this->enableRequestTracking) {
+            return '';
         }
-        
-        $uri = $request->server['request_uri'] ?? '/';
-        
-        // Remove query string
-        if (($pos = strpos($uri, '?')) !== false) {
-            $uri = substr($uri, 0, $pos);
+
+        $requestId = uniqid('req_', true);
+        $context = Coroutine::getContext();
+        $context['request_id'] = $requestId;
+        $context['request_start'] = microtime(true);
+        $context['request_uri'] = $request->server['request_uri'] ?? '/';
+
+        return $requestId;
+    }
+
+    /**
+     * Cleans up request context.
+     */
+    private function cleanupRequestContext(): void
+    {
+        if (!$this->enableRequestTracking) {
+            return;
         }
-        
-        // Remove fragment
-        if (($pos = strpos($uri, '#')) !== false) {
-            $uri = substr($uri, 0, $pos);
+
+        $context = Coroutine::getContext();
+        unset($context['request_id'], $context['request_start'], $context['request_uri']);
+    }
+
+    /**
+     * Formats error response with debugging information.
+     *
+     * @param \Throwable $e The exception
+     * @param string $requestId The request ID
+     * @return string The formatted error response
+     */
+    private function formatErrorResponse(\Throwable $e, string $requestId): string
+    {
+        if (!defined('YII_DEBUG') || !YII_DEBUG) {
+            return 'Internal Server Error';
         }
-        
-        // Decode URL-encoded characters to prevent encoded path traversal attacks
-        $uri = rawurldecode($uri);
-        
-        // Security: Check for null bytes and reject
-        if (strpos($uri, "\0") !== false) {
-            return false;
+
+        $output = "Error: {$e->getMessage()}\n\n";
+        $output .= "Request ID: {$requestId}\n";
+        $output .= "Coroutine ID: " . Coroutine::getCid() . "\n";
+
+        // Add pool statistics if available
+        $context = Coroutine::getContext();
+        if (isset($context['request_uri'])) {
+            $output .= "URI: {$context['request_uri']}\n";
         }
-        
-        // Normalize path separators and remove consecutive slashes
-        $uri = preg_replace('#/+#', '/', $uri);
-        
-        // Security: Reject URIs containing path traversal patterns
-        if (strpos($uri, '..') !== false) {
-            return false;
-        }
-        
-        // Get file extension
-        $extension = pathinfo($uri, PATHINFO_EXTENSION);
-        
-        // Check if it's a static file extension we handle
-        if (empty($extension) || !isset($this->staticFileExtensions[$extension])) {
-            return false;
-        }
-        
-        // Construct file path
-        $filePath = rtrim($this->documentRoot, '/') . '/' . ltrim($uri, '/');
-        
-        // Security check: ensure the file path is within document root
-        if ($this->realDocRoot === false || $this->realDocRoot === null) {
-            return false;
-        }
-        
-        $realPath = realpath($filePath);
-        if ($realPath === false) {
-            return false;
-        }
-        
-        // Security: Ensure realPath is within documentRoot with proper directory boundary check
-        $realDocRootWithSeparator = rtrim($this->realDocRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-        if (strpos($realPath . DIRECTORY_SEPARATOR, $realDocRootWithSeparator) !== 0) {
-            return false;
-        }
-        
-        // Check if file exists and is readable
-        if (!is_file($realPath) || !is_readable($realPath)) {
-            return false;
-        }
-        
-        // Read file content
-        $content = file_get_contents($realPath);
-        if ($content === false) {
-            return false;
-        }
-        
-        // Set response headers
-        $response->status(200);
-        $response->header('Content-Type', $this->staticFileExtensions[$extension]);
-        $response->header('X-Content-Type-Options', 'nosniff');
-        
-        // Add cache headers for static files
-        $lastModified = filemtime($realPath);
-        $response->header('Last-Modified', gmdate('D, d M Y H:i:s', $lastModified) . ' GMT');
-        $response->header('Cache-Control', 'public, max-age=86400'); // 1 day
-        
-        // Check if client has cached version
-        $ifModifiedSince = $request->header['if-modified-since'] ?? null;
-        if ($ifModifiedSince !== null && strtotime($ifModifiedSince) >= $lastModified) {
-            $response->status(304);
-            $response->end();
-            return true;
-        }
-        
-        $response->end($content);
-        return true;
+
+        $output .= "\nStack Trace:\n" . $e->getTraceAsString();
+
+        return $output;
     }
 
 }

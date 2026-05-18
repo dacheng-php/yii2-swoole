@@ -4,10 +4,23 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\User;
 
+use Dacheng\Yii2\Swoole\Coroutine\ResettableInterface;
 use Swoole\Coroutine;
 use yii\web\User as BaseUser;
 
-class CoroutineUser extends BaseUser
+/**
+ * CoroutineUser provides coroutine-safe user identity management.
+ *
+ * This class extends Yii2's User component to properly isolate user identity
+ * across Swoole coroutines. Each coroutine maintains its own identity state,
+ * preventing authentication leakage between concurrent requests.
+ *
+ * Implements ResettableInterface to ensure identity is cleared during
+ * coroutine context reset.
+ *
+ * @see ResettableInterface
+ */
+class CoroutineUser extends BaseUser implements ResettableInterface
 {
     private const CONTEXT_KEY = '__yiiCoroutineUser';
 

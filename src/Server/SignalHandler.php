@@ -9,7 +9,7 @@ use Swoole\Process;
 
 /**
  * SignalHandler manages graceful shutdown on SIGTERM/SIGINT signals.
- * 
+ *
  * This handler:
  * - Registers signal handlers for SIGTERM and SIGINT
  * - Coordinates graceful shutdown of server components
@@ -21,33 +21,33 @@ class SignalHandler
 {
     private const SHUTDOWN_TIMEOUT = 30.0; // Maximum time to wait for graceful shutdown
     private const CHECK_INTERVAL = 0.1;    // Interval to check shutdown status
-    
+
     private bool $shutdownRequested = false;
+    private bool $forceExit = false;
     private bool $isShuttingDown = false;
     private array $shutdownCallbacks = [];
     private ?float $shutdownStartTime = null;
-    
+
     /**
      * Registers signal handlers for SIGTERM and SIGINT
      */
     public function register(): void
     {
         if (!extension_loaded('pcntl')) {
-            // Use error_log here since Yii may not be initialized yet
-            error_log('[SignalHandler] PCNTL extension not loaded, signal handling disabled');
+            ShutdownLogger::warning('[SignalHandler] PCNTL extension not loaded, signal handling disabled');
             return;
         }
-        
+
         // Use Swoole's Process::signal for coroutine-safe signal handling
         Process::signal(SIGTERM, function (int $signo) {
             $this->handleShutdownSignal($signo);
         });
-        
+
         Process::signal(SIGINT, function (int $signo) {
             $this->handleShutdownSignal($signo);
         });
     }
-    
+
     /**
      * Unregisters signal handlers
      */
@@ -56,14 +56,14 @@ class SignalHandler
         if (!extension_loaded('pcntl')) {
             return;
         }
-        
+
         Process::signal(SIGTERM, null);
         Process::signal(SIGINT, null);
     }
-    
+
     /**
      * Registers a callback to be executed during shutdown
-     * 
+     *
      * @param string $name Unique name for the callback
      * @param callable $callback Callback to execute (should return void)
      * @param int $priority Priority (lower numbers execute first, default 100)
@@ -75,7 +75,7 @@ class SignalHandler
             'priority' => $priority,
         ];
     }
-    
+
     /**
      * Checks if shutdown has been requested
      */
@@ -83,7 +83,7 @@ class SignalHandler
     {
         return $this->shutdownRequested;
     }
-    
+
     /**
      * Checks if shutdown is in progress
      */
@@ -91,30 +91,27 @@ class SignalHandler
     {
         return $this->isShuttingDown;
     }
-    
+
     /**
      * Handles shutdown signals (SIGTERM/SIGINT)
      */
     private function handleShutdownSignal(int $signo): void
     {
-        $signalName = $signo === SIGTERM ? 'SIGTERM' : 'SIGINT';
-        
         if ($this->shutdownRequested) {
-            // Use error_log during shutdown to ensure message is captured
-            error_log("Forcing immediate exit");
-            exit(1);
+            ShutdownLogger::warning('Forcing immediate exit after second signal');
+            $this->forceExit = true;
+            return;
         }
-        
+
         $this->shutdownRequested = true;
-        // Use error_log during shutdown to ensure message is captured
-        error_log("Shutting down server...");
-        
+        ShutdownLogger::info('Shutting down server...');
+
         // Perform graceful shutdown in a coroutine
         Coroutine::create(function () {
             $this->performGracefulShutdown();
         });
     }
-    
+
     /**
      * Performs graceful shutdown sequence
      */
@@ -123,78 +120,79 @@ class SignalHandler
         if ($this->isShuttingDown) {
             return;
         }
-        
+
         $this->isShuttingDown = true;
         $this->shutdownStartTime = microtime(true);
-        
+
         // Sort callbacks by priority
         $callbacks = $this->shutdownCallbacks;
         uasort($callbacks, function ($a, $b) {
             return $a['priority'] <=> $b['priority'];
         });
-        
+
         // Execute shutdown callbacks in priority order
         foreach ($callbacks as $name => $config) {
             $elapsed = microtime(true) - $this->shutdownStartTime;
-            
+
             if ($elapsed >= self::SHUTDOWN_TIMEOUT) {
-                // Use error_log during shutdown to ensure message is captured
-                error_log("Shutdown timeout reached, skipping remaining callbacks");
+                ShutdownLogger::warning("Shutdown timeout reached, skipping remaining callbacks");
                 break;
             }
-            
+
             try {
                 $config['callback']();
             } catch (\Throwable $e) {
-                // Use error_log during shutdown to ensure message is captured
-                error_log("Error in shutdown callback '{$name}': {$e->getMessage()}");
+                ShutdownLogger::error("Error in shutdown callback '{$name}': {$e->getMessage()}");
             }
         }
-        
+
         $totalTime = microtime(true) - $this->shutdownStartTime;
-        // Use error_log during shutdown to ensure message is captured
-        error_log(sprintf('Server shutdown completed in %.3f seconds', $totalTime));
-        
+        ShutdownLogger::info(sprintf('Server shutdown completed in %.3f seconds', $totalTime));
+
         // Wait briefly for remaining coroutines to complete
         $this->waitForRemainingCoroutines(0.5);
-        
+
         // Exit the event loop gracefully
         if (class_exists('Swoole\\Event', false) && method_exists('Swoole\\Event', 'exit')) {
             \Swoole\Event::exit();
         }
+
+        // Force exit if requested (second signal received)
+        if ($this->forceExit) {
+            exit(1);
+        }
     }
-    
+
     /**
      * Waits for in-flight requests to complete
-     * 
+     *
      * @param callable $checkCallback Callback that returns true if requests are still in-flight
      * @param float $maxWaitTime Maximum time to wait in seconds
      */
     public function waitForInflightRequests(callable $checkCallback, float $maxWaitTime = 5.0): void
     {
         $startTime = microtime(true);
-        
+
         while (microtime(true) - $startTime < $maxWaitTime) {
             if (!$checkCallback()) {
                 return;
             }
-            
+
             Coroutine::sleep(self::CHECK_INTERVAL);
         }
-        
-        // Use error_log during shutdown to ensure message is captured
-        error_log('Request timeout, proceeding with shutdown');
+
+        ShutdownLogger::warning('Request timeout, proceeding with shutdown');
     }
 
     /**
      * Waits for remaining coroutines to complete
-     * 
+     *
      * @param float $maxWaitTime Maximum time to wait in seconds
      */
     private function waitForRemainingCoroutines(float $maxWaitTime): void
     {
         $startTime = microtime(true);
-        
+
         while (microtime(true) - $startTime < $maxWaitTime) {
             $stats = Coroutine::stats();
             $coroutines = (int)($stats['coroutine_num'] ?? 0);
@@ -206,12 +204,11 @@ class SignalHandler
 
             Coroutine::sleep(self::CHECK_INTERVAL);
         }
-        
+
         $stats = Coroutine::stats();
         $remaining = (int)($stats['coroutine_num'] ?? 0);
         if ($remaining > 2) {
-            // Use error_log during shutdown to ensure message is captured
-            error_log("Warning: {$remaining} coroutines still active");
+            ShutdownLogger::warning("Warning: {$remaining} coroutines still active");
         }
     }
 }

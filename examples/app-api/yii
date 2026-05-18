@@ -10,6 +10,6 @@ require __DIR__ . '/vendor/yiisoft/yii2/Yii.php';
 
 $config = require __DIR__ . '/config/console.php';
 
-$application = new \Dacheng\Yii2\Swoole\Console\CoroutineApplication($config);
+$application = new \Dacheng\Yii2\Swoole\Console\SwooleConsoleApplication($config);
 $exitCode = $application->run();
 exit($exitCode);

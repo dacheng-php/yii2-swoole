@@ -4,35 +4,53 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Db;
 
+use Dacheng\Yii2\Swoole\Pools\DbConnectionPool;
+use Dacheng\Yii2\Swoole\Pools\PoolManager;
 use PDO;
-use Swoole\Coroutine\Channel;
+use Swoole\Coroutine;
 use yii\db\Connection;
 
+/**
+ * CoroutineDbConnection provides connection pooling for database access in Swoole coroutine context.
+ *
+ * This class extends Yii2's db Connection and manages a pool of PDO instances
+ * that are shared across coroutines. Each coroutine acquires a PDO connection
+ * from the pool when needed and returns it after use.
+ *
+ * Key features:
+ * - Automatic connection pooling when in coroutine context
+ * - Graceful fallback to non-pooled mode when not in coroutine
+ * - Transparent integration with existing Yii2 database code
+ * - Configurable pool size and timeout
+ *
+ * @property int $poolMaxActive Maximum number of connections in pool (default: 20)
+ * @property float $poolWaitTimeout Maximum time to wait for connection (default: 3.0)
+ * @property bool $enableCoroutinePooling Whether pooling is enabled (default: true)
+ */
 class CoroutineDbConnection extends Connection
 {
+    use PoolManager;
+
+    /**
+     * Maximum number of connections in the pool.
+     */
     public int $poolMaxActive = 20;
 
+    /**
+     * Maximum time to wait for an available connection (in seconds).
+     */
     public float $poolWaitTimeout = 3.0;
 
+    /**
+     * Whether to enable connection pooling in coroutine context.
+     */
     public bool $enableCoroutinePooling = true;
 
     /**
-     * @var array<string, CoroutineConnectionPool>
+     * Tracks whether the current connection has been released back to pool.
+     *
+     * @var bool
      */
-    private static array $sharedPools = [];
-
-    /**
-     * @var array<string, Channel>
-     */
-    private static array $poolLocks = [];
-
-    /**
-     * @var bool Whether shutdown function has been registered
-     */
-    private static bool $shutdownRegistered = false;
-
-    private ?string $poolKey = null;
-
     private bool $released = false;
 
     public function open(): void
@@ -41,7 +59,7 @@ class CoroutineDbConnection extends Connection
             return;
         }
 
-        if (!$this->isPoolingEnabled()) {
+        if (!$this->enableCoroutinePooling || Coroutine::getCid() < 0) {
             parent::open();
 
             return;
@@ -55,7 +73,7 @@ class CoroutineDbConnection extends Connection
 
     public function close(): void
     {
-        if (!$this->isPoolingEnabled()) {
+        if (!$this->enableCoroutinePooling || Coroutine::getCid() < 0) {
             parent::close();
 
             return;
@@ -69,12 +87,18 @@ class CoroutineDbConnection extends Connection
             $pdo = $this->pdo;
             $this->released = true;
 
-            parent::close();
+            try {
+                parent::close();
+            } catch (\Throwable $e) {
+                \Yii::error('Error closing PDO connection: ' . $e->getMessage(), __CLASS__);
+            }
 
+            // Always release to pool, even if parent::close() throws
+            // This prevents connection pool exhaustion
             try {
                 $this->ensurePool()->release($pdo);
             } catch (\Throwable $e) {
-                \Yii::error('Error releasing connection to pool: ' . $e->getMessage(), __CLASS__);
+                \Yii::error('Error releasing connection to pool: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), __CLASS__);
             }
         } else {
             parent::close();
@@ -90,128 +114,90 @@ class CoroutineDbConnection extends Connection
         $this->pdo = null;
     }
 
-    private function ensurePool(): CoroutineConnectionPool
-    {
-        $key = $this->poolKey ??= $this->buildPoolKey();
-
-        // Register shutdown function on first pool creation as a safety net
-        if (!self::$shutdownRegistered) {
-            self::registerShutdownHandler();
-        }
-
-        if (!isset(self::$sharedPools[$key])) {
-            $lock = self::$poolLocks[$key] ??= $this->createPoolLock();
-            $token = $lock->pop();
-
-            try {
-                if (!isset(self::$sharedPools[$key])) {
-                    self::$sharedPools[$key] = new CoroutineConnectionPool(
-                        fn (): PDO => $this->createPdoForPool(),
-                        $this->poolMaxActive,
-                        $this->poolWaitTimeout
-                    );
-                }
-            } finally {
-                $lock->push($token);
-            }
-        }
-
-        return self::$sharedPools[$key];
-    }
-
-    public function getPool(): CoroutineConnectionPool
+    /**
+     * Returns the connection pool instance.
+     *
+     * @return DbConnectionPool
+     */
+    public function getPool(): DbConnectionPool
     {
         return $this->ensurePool();
     }
 
-    private function buildPoolKey(): string
+    protected function buildPoolKey(): string
     {
-        return md5(implode('|', [
+        // Use raw string as key - no need for hashing
+        // Components are separated by '|' to prevent collisions
+        return implode('|', [
             static::class,
             (string) $this->dsn,
             (string) $this->username,
             (string) $this->charset,
-        ]));
+        ]);
     }
 
+    protected function createPool(): DbConnectionPool
+    {
+        return new DbConnectionPool(
+            fn (): PDO => $this->createPdoForPool(),
+            $this->poolMaxActive,
+            $this->poolWaitTimeout
+        );
+    }
+
+    protected static function getPoolClass(): string
+    {
+        return DbConnectionPool::class;
+    }
+
+    /**
+     * Creates a PDO instance for the connection pool.
+     *
+     * This method creates and initializes a PDO connection without modifying
+     * $this->pdo, ensuring coroutine safety during pool initialization.
+     *
+     * @return PDO The initialized PDO connection
+     */
     private function createPdoForPool(): PDO
     {
         $pdo = parent::createPdoInstance();
-
-        $original = $this->pdo;
-        $this->pdo = $pdo;
-        $this->initConnection();
-        $this->pdo = $original;
+        $this->initPdoConnection($pdo);
 
         return $pdo;
     }
 
-    private function isPoolingEnabled(): bool
-    {
-        return $this->enableCoroutinePooling && \Swoole\Coroutine::getCid() >= 0;
-    }
-
-    private function createPoolLock(): Channel
-    {
-        $lock = new Channel(1);
-        $lock->push(true);
-
-        return $lock;
-    }
-
     /**
-     * Shuts down all connection pools
-     * This should be called during application shutdown
+     * Initializes a PDO connection with configured attributes and emulation settings.
+     *
+     * This method replicates the essential initialization logic from parent::initConnection()
+     * without relying on $this->pdo, making it safe for pool creation.
+     *
+     * @param PDO $pdo The PDO instance to initialize
      */
-    public static function shutdownAllPools(): void
+    private function initPdoConnection(PDO $pdo): void
     {
-        // Shutdown all pools
-        foreach (self::$sharedPools as $pool) {
-            try {
-                $pool->shutdown();
-            } catch (\Throwable $e) {
-                // Silently handle shutdown errors
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+        // Set charset if specified (MySQL specific)
+        if ($this->charset !== null && stripos((string)$this->dsn, 'charset=') === false) {
+            $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'mysql') {
+                $pdo->exec('SET NAMES ' . $pdo->quote($this->charset));
             }
         }
-        
-        // Close and clear all pool locks
-        foreach (self::$poolLocks as $lock) {
-            try {
-                if ($lock instanceof Channel) {
-                    $lock->close();
-                }
-            } catch (\Throwable $e) {
-                // Silently handle lock close errors (channel may already be closed)
-            }
-        }
-        
-        self::$sharedPools = [];
-        self::$poolLocks = [];
-    }
 
-    /**
-     * Registers a PHP shutdown function as a safety net to ensure pools are cleaned up
-     * even if normal shutdown sequence fails (e.g., fatal error, crash)
-     */
-    private static function registerShutdownHandler(): void
-    {
-        if (self::$shutdownRegistered) {
-            return;
+        // Configure emulation based on PDO driver
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'mysql') {
+            $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, $this->emulatePrepare ?? false);
         }
 
-        self::$shutdownRegistered = true;
+        // Set default fetch mode if configured
+        if ($this->pdoType !== null) {
+            $pdo->setAttribute(PDO::ATTR_ORACLE_NULLS, $this->pdoType);
+        }
 
-        register_shutdown_function(function (): void {
-            // Only cleanup if pools/locks still exist
-            // This prevents double cleanup during normal shutdown (since shutdownAllPools() clears the arrays)
-            if (!empty(self::$sharedPools) || !empty(self::$poolLocks)) {
-                try {
-                    self::shutdownAllPools();
-                } catch (\Throwable $e) {
-                    // Use error_log here to avoid dependency on Yii during shutdown
-                    error_log('[CoroutineDbConnection] Error in shutdown handler: ' . $e->getMessage());
-                }
-            }
-        });
+        // Trigger after open event on the connection instance
+        $this->trigger(self::EVENT_AFTER_OPEN);
     }
 }

@@ -9,6 +9,7 @@ use Swoole\Coroutine;
 use Yii;
 use yii\base\InvalidConfigException;
 use yii\di\Instance;
+use yii\redis\Connection as RedisConnection;
 use yii\redis\Session as YiiRedisSession;
 use yii\web\Cookie;
 
@@ -19,20 +20,24 @@ class CoroutineSession extends YiiRedisSession
     private bool $deferRegistered = false;
 
     private int $deferCoroutineId = -1;
-    
+
     private ?string $_sessionId = null;
 
     public function init()
     {
-        $this->redis = Instance::ensure($this->redis, CoroutineRedisConnection::class);
+        // Ensure redis is a valid Redis connection (accepts any yii\redis\Connection implementation)
+        $this->redis = Instance::ensure($this->redis, RedisConnection::class);
 
-        if (!$this->redis instanceof CoroutineRedisConnection) {
-            throw new InvalidConfigException(sprintf(
-                '%s requires redis component to be an instance of %s, %s given.',
+        // Warn if running in coroutine context without CoroutineRedisConnection
+        // This allows testing with mocks while encouraging proper coroutine-safe usage
+        if (Coroutine::getCid() >= 0 && !$this->redis instanceof CoroutineRedisConnection) {
+            Yii::warning(sprintf(
+                '%s is running in coroutine context but redis is not %s (got %s). ' .
+                'This may cause connection issues under high concurrency.',
                 __CLASS__,
                 CoroutineRedisConnection::class,
-                is_object($this->redis) ? get_class($this->redis) : gettype($this->redis)
-            ));
+                get_class($this->redis)
+            ), __METHOD__);
         }
 
         if ($this->keyPrefix === null) {
@@ -64,10 +69,10 @@ class CoroutineSession extends YiiRedisSession
         // Load session data from Redis without calling parent::open()
         // to avoid session_set_save_handler() which fails after headers sent
         $data = $this->readSession($this->getId());
-        
-        // Unserialize session data
+
+        // Unserialize session data with proper error handling
         if (!empty($data)) {
-            $_SESSION = @unserialize($data) ?: [];
+            $_SESSION = $this->unserializeSessionData($data, $this->getId());
         } else {
             $_SESSION = [];
         }
@@ -83,13 +88,16 @@ class CoroutineSession extends YiiRedisSession
 
     public function close()
     {
-        // Prevent duplicate close() calls
+        // Prevent duplicate close() calls - early return pattern
         if ($this->isClosed) {
             return;
         }
-        
-        // Save session data to Redis BEFORE marking as closed
-        // This must happen before setting isClosed = true
+
+        // Mark as closed FIRST to prevent race conditions
+        // This ensures only one call can proceed to write session data
+        $this->isClosed = true;
+
+        // Save session data to Redis
         if (isset($_SESSION) && is_array($_SESSION) && !empty($_SESSION) && $this->_sessionId !== null) {
             try {
                 // Serialize session data and write to Redis
@@ -99,13 +107,10 @@ class CoroutineSession extends YiiRedisSession
                 \Yii::error('Failed to save session: ' . $e->getMessage(), __METHOD__);
             }
         }
-        
-        // NOW mark as closed
-        $this->isClosed = true;
 
-        if ($this->redis instanceof CoroutineRedisConnection) {
-            $this->redis->close();
-        }
+        // Note: We don't close the Redis connection here because it's managed
+        // by the connection pool. The connection will be returned to the pool
+        // when the coroutine ends or when explicitly released by the application.
 
         if (isset($_SESSION) && is_array($_SESSION)) {
             $_SESSION = [];
@@ -148,21 +153,71 @@ class CoroutineSession extends YiiRedisSession
     
     /**
      * Override setId to avoid calling session_id() which doesn't work after headers sent
+     *
+     * @param string $value The session ID to set
      */
     public function setId($value)
     {
         $this->_sessionId = $value;
     }
-    
+
     /**
      * Override getId to avoid calling session_id() which doesn't work after headers sent
+     *
+     * @return string The current session ID
      */
     public function getId()
     {
         if ($this->_sessionId === null) {
-            $this->_sessionId = session_create_id('');
+            $this->_sessionId = $this->generateSecureSessionId();
         }
         return $this->_sessionId;
+    }
+
+    /**
+     * Generates a cryptographically secure session ID.
+     * Uses session_create_id() with proper validation and fallback.
+     *
+     * @return string A secure session ID
+     */
+    private function generateSecureSessionId(): string
+    {
+        try {
+            $sessionId = session_create_id('');
+
+            // Validate the generated session ID
+            if ($this->isValidSessionId($sessionId)) {
+                return $sessionId;
+            }
+        } catch (\Throwable $e) {
+            \Yii::warning('Failed to generate session ID with session_create_id: ' . $e->getMessage(), __METHOD__);
+        }
+
+        // Fallback: generate a cryptographically secure random ID
+        // Format: 32 hex chars (128 bits) + optional prefix
+        $randomBytes = random_bytes(16);
+        $sessionId = bin2hex($randomBytes);
+
+        return $sessionId;
+    }
+
+    /**
+     * Validates that a session ID meets security requirements.
+     *
+     * @param string $id The session ID to validate
+     * @return bool True if valid, false otherwise
+     */
+    private function isValidSessionId(string $id): bool
+    {
+        // Session ID should be alphanumeric and between 20 and 128 characters
+        $length = strlen($id);
+        if ($length < 20 || $length > 128) {
+            return false;
+        }
+
+        // Should only contain alphanumeric characters, dashes, and commas
+        // This matches PHP's session.sid_allowed_characters: [a-zA-Z0-9,-]
+        return preg_match('/^[a-zA-Z0-9,\-]+$/', $id) === 1;
     }
     
     /**
@@ -205,12 +260,16 @@ class CoroutineSession extends YiiRedisSession
         $cookieId = $request->getCookies()->getValue($name, '');
 
         if ($cookieId !== '') {
-            if (session_status() !== PHP_SESSION_ACTIVE && session_id() !== $cookieId) {
-                $this->setId($cookieId);
+            // Validate the cookie session ID before using it
+            if ($this->isValidSessionId($cookieId)) {
+                if (session_status() !== PHP_SESSION_ACTIVE && session_id() !== $cookieId) {
+                    $this->setId($cookieId);
+                }
+                $this->setHasSessionId(true);
+            } else {
+                \Yii::warning('Invalid session ID from cookie, generating new one', __METHOD__);
+                $this->setHasSessionId(false);
             }
-
-            $this->setHasSessionId(true);
-
             return;
         }
 
@@ -218,7 +277,8 @@ class CoroutineSession extends YiiRedisSession
             return;
         }
 
-        $newId = session_create_id('');
+        // Generate new secure session ID using getId() which handles generation
+        $newId = $this->generateSecureSessionId();
         if (session_status() !== PHP_SESSION_ACTIVE) {
             $this->setId($newId);
         }
