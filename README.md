@@ -1,48 +1,35 @@
 # Yii2-Swoole
 
-Yii2 extension for Swoole: High-performance single-process asynchronous HTTP server with coroutines, database/Redis connection pools, and async job queue for building high-concurrency PHP applications.
+Yii2-Swoole 是 Yii2 的 Swoole 协程扩展。安装并配置后，传统 Yii2 应用可以运行在 Swoole HTTP Server 之上，业务代码进入 coroutine-native 运行模式，同时可以直接使用连接池、协程 Redis、协程队列、协程 HTTP 客户端等能力。
 
-## ✨ Features
+它有两个核心目标：
 
-### 🚀 Core Features
-- **Single-Process Coroutine HTTP Server** - No process management overhead
-- **Automatic Connection Pooling** - MySQL and Redis connection reuse
-- **Async Job Queue** - Redis-based queue with concurrent processing
-- **Non-blocking Logging** - Async file logging with channel buffering
-- **Coroutine HTTP Client** - Non-blocking HTTP requests with parallel execution
-- **Coroutine Components** - Session, User, DB, Redis, Cache all coroutine-safe
-- **Graceful Shutdown** - Clean shutdown of pools, workers, and connections
-- **Static File Serving** - Built-in support for CSS, JS, images, fonts
+- **运行既有 Yii2 应用**：尽量少改业务代码，把 Yii2 应用迁移到 Swoole 协程 HTTP 服务。
+- **提供协程原生组件**：用 Yii2 的组件风格封装 Swoole 协程能力，供业务代码深度使用。
 
-### ⚡ Performance Benefits
-- **10-100x faster** than traditional PHP-FPM for I/O bound workloads
-- **Persistent connections** - Database and Redis connections stay open
-- **Zero copy** - Direct memory operations where possible
-- **Concurrent processing** - Handle thousands of requests simultaneously
+## 能力
 
-### 🛠️ Developer Experience
-- **Drop-in replacement** - Minimal code changes from standard Yii2
-- **Full Yii2 compatibility** - Works with existing Yii2 components
-- **Easy configuration** - Simple bootstrap and component setup
-- **Rich examples** - Complete example applications included
+- 单进程协程 HTTP Server
+- MySQL / Redis 连接池
+- 协程安全的 DB、Redis、Cache、Queue、Log、Session、User 组件
+- 基于 Swoole 协程的 HTTP Client
+- 请求结束自动清理请求状态并归还连接
 
-## 📋 Requirements
+## 要求
 
 - PHP >= 8.1
 - Swoole >= 6.0
 - Yii2 >= 2.0
 
-## 📦 Installation
+## 安装
 
 ```bash
 composer require dacheng-php/yii2-swoole
 ```
 
-## 🚀 Quick Start
+## 配置
 
-### 1. Create Configuration
-
-Create `config/swoole.php`:
+在应用配置中引入 `Bootstrap`、HTTP Server 和需要协程化的组件：
 
 ```php
 <?php
@@ -52,26 +39,20 @@ return [
         [
             'class' => \Dacheng\Yii2\Swoole\Bootstrap::class,
             'componentId' => 'swooleHttpServer',
-            'memoryLimit' => '2G',
+            'hookFlags' => SWOOLE_HOOK_ALL,
         ],
     ],
     'components' => [
-        // HTTP Server
         'swooleHttpServer' => [
             'class' => \Dacheng\Yii2\Swoole\Server\HttpServer::class,
             'host' => '127.0.0.1',
             'port' => 9501,
             'documentRoot' => __DIR__ . '/../web',
+            'dispatcher' => new \Dacheng\Yii2\Swoole\Server\RequestDispatcher(__DIR__ . '/web.php'),
             'settings' => [
                 'max_coroutine' => 100000,
-                'log_level' => SWOOLE_LOG_WARNING,
             ],
-            'dispatcher' => new \Dacheng\Yii2\Swoole\Server\RequestDispatcher(
-                __DIR__ . '/web.php'
-            ),
         ],
-        
-        // Database with Connection Pool
         'db' => [
             'class' => \Dacheng\Yii2\Swoole\Db\CoroutineDbConnection::class,
             'dsn' => 'mysql:host=127.0.0.1;dbname=myapp',
@@ -81,451 +62,89 @@ return [
             'poolMaxActive' => 20,
             'poolWaitTimeout' => 5.0,
         ],
-        
-        // Redis with Connection Pool
         'redis' => [
             'class' => \Dacheng\Yii2\Swoole\Redis\CoroutineRedisConnection::class,
             'hostname' => '127.0.0.1',
             'port' => 6379,
-            'database' => 0,
-            'poolMaxActive' => 32,
-            'poolWaitTimeout' => 3.0,
+            'poolMaxActive' => 20,
+            'poolWaitTimeout' => 5.0,
         ],
-        
-        // Cache with Redis Pool
         'cache' => [
             'class' => \Dacheng\Yii2\Swoole\Cache\CoroutineRedisCache::class,
             'redis' => 'redis',
         ],
-        
-        // Async Queue
         'queue' => [
             'class' => \Dacheng\Yii2\Swoole\Queue\CoroutineRedisQueue::class,
             'redis' => 'redis',
             'channel' => 'queue',
             'concurrency' => 10,
         ],
-        
-        // Async Logging
-        'log' => [
-            'targets' => [
-                [
-                    'class' => \Dacheng\Yii2\Swoole\Log\CoroutineFileTarget::class,
-                    'levels' => ['error', 'warning'],
-                    'logFile' => '@runtime/logs/app.log',
-                    'maxFileSize' => 10240, // KB
-                    'maxLogFiles' => 5,
-                    'enableRotation' => true,
-                ],
-            ],
-        ],
-        
-        // Coroutine-safe Session
-        'session' => [
-            'class' => \Dacheng\Yii2\Swoole\Session\CoroutineSession::class,
-            'redis' => 'redis',
-        ],
-        
-        // Coroutine-safe User
-        'user' => [
-            'class' => \Dacheng\Yii2\Swoole\User\CoroutineUser::class,
-            'identityClass' => 'app\models\User',
-        ],
     ],
 ];
 ```
 
-### 2. Update Web Configuration
-
-Modify `config/web.php`:
+如果控制台应用没有自动加载同一份配置，可以手动注册启动命令：
 
 ```php
-<?php
-
-$config = [
-    'id' => 'my-app',
-    'basePath' => dirname(__DIR__),
-    'components' => [
-        'request' => [
-            //... other config
-            'baseUrl' => '',
-        ],
-        'assetManager' => [
-            //... other config
-            'basePath' => dirname(__DIR__) . '/web/assets',
-            'baseUrl' => '/assets',
-        ],
+'controllerMap' => [
+    'swoole' => [
+        'class' => \Dacheng\Yii2\Swoole\Console\SwooleController::class,
+        'serverComponent' => 'swooleHttpServer',
     ],
-    // ... other config
-];
-
-// Merge Swoole config
-$swooleConfig = require __DIR__ . '/swoole.php';
-$config = \yii\helpers\BaseArrayHelper::merge($swooleConfig, $config);
-
-return $config;
+],
 ```
 
-### 3. Start the Server
+## 启动
 
 ```bash
 php yii swoole/start
 ```
 
-Your application is now running on `http://127.0.0.1:9501`
+访问：
 
-### 4. Test It
+```text
+http://127.0.0.1:9501
+```
+
+停止服务：
 
 ```bash
-curl http://127.0.0.1:9501/
-```
-
-## 📖 Documentation
-
-### Configuration
-
-#### Bootstrap Options
-
-```php
-'bootstrap' => [
-    [
-        'class' => \Dacheng\Yii2\Swoole\Bootstrap::class,
-        'componentId' => 'swooleHttpServer',
-        'memoryLimit' => '2G',
-        'hookFlags' => SWOOLE_HOOK_ALL,
-        'classMap' => [
-            // Override Yii2 core classes
-            'yii\helpers\ArrayHelper' => '@app/helpers/ArrayHelper.php',
-            'yii\helpers\Json' => '@app/helpers/Json.php',
-        ],
-    ],
-],
-```
-
-**Options:**
-- `componentId` - Component ID for the HTTP server (default: 'swooleHttpServer')
-- `memoryLimit` - PHP memory limit for Swoole process (default: '512M')
-- `hookFlags` - Swoole hook flags for coroutine (default: SWOOLE_HOOK_ALL)
-- `classMap` - Custom class map for overriding Yii2 core classes (default: [])
-
-#### HTTP Server Options
-
-```php
-'swooleHttpServer' => [
-    'class' => \Dacheng\Yii2\Swoole\Server\HttpServer::class,
-    'host' => '0.0.0.0',              // Listen address
-    'port' => 9501,                   // Listen port
-    'documentRoot' => '@webroot',     // Static files directory
-    'settings' => [
-        'max_coroutine' => 100000,    // Max concurrent coroutines
-        'open_tcp_nodelay' => true,   // TCP_NODELAY option
-        'tcp_fastopen' => true,       // TCP Fast Open
-        'log_level' => SWOOLE_LOG_WARNING,
-    ],
-    'staticFileExtensions' => [       // MIME types for static files
-        'css' => 'text/css',
-        'js' => 'application/javascript',
-        // ... more types
-    ],
-],
-```
-
-#### Database Pool Options
-
-```php
-'db' => [
-    'class' => \Dacheng\Yii2\Swoole\Db\CoroutineDbConnection::class,
-    'dsn' => 'mysql:host=127.0.0.1;dbname=myapp',
-    'poolMaxActive' => 20,            // Max connections in pool
-    'poolWaitTimeout' => 5.0,         // Timeout waiting for connection (seconds)
-    'enableCoroutinePooling' => true, // Enable/disable pooling
-],
-```
-
-#### Redis Pool Options
-
-```php
-'redis' => [
-    'class' => \Dacheng\Yii2\Swoole\Redis\CoroutineRedisConnection::class,
-    'hostname' => '127.0.0.1',
-    'port' => 6379,
-    'poolMaxActive' => 32,            // Max connections in pool
-    'poolWaitTimeout' => 3.0,         // Timeout waiting for connection
-    'enableCoroutinePooling' => true, // Enable/disable pooling
-],
-```
-
-#### Cache Options
-
-```php
-'cache' => [
-    'class' => \Dacheng\Yii2\Swoole\Cache\CoroutineRedisCache::class,
-    'redis' => 'redis',               // Reference to redis component
-    'keyPrefix' => 'myapp:',          // Optional key prefix
-],
-```
-
-#### HTTP Client Options
-
-```php
-'httpClient' => [
-    'class' => \Dacheng\Yii2\Swoole\HttpClient\CoroutineClient::class,
-    'baseUrl' => 'https://api.example.com',
-    'transport' => [
-        'class' => \Dacheng\Yii2\Swoole\HttpClient\CoroutineTransport::class,
-        'connectionTimeout' => 3,     // Connection timeout (seconds)
-        'requestTimeout' => 10,       // Request timeout (seconds)
-        'keepAlive' => true,          // Enable keep-alive connections
-    ],
-],
-```
-
-#### Queue Options
-
-```php
-'queue' => [
-    'class' => \Dacheng\Yii2\Swoole\Queue\CoroutineRedisQueue::class,
-    'redis' => 'redis',
-    'channel' => 'queue',
-    'concurrency' => 10,              // Number of concurrent workers
-    'executeInline' => true,          // Execute in same process (faster)
-],
-```
-
-#### Logging Options
-
-```php
-'log' => [
-    'targets' => [
-        [
-            'class' => \Dacheng\Yii2\Swoole\Log\CoroutineFileTarget::class,
-            'levels' => ['error', 'warning'],
-            'logFile' => '@runtime/logs/app.log',
-            'maxFileSize' => 10240,    // Max file size before rotation (KB)
-            'maxLogFiles' => 5,        // Number of rotated files to keep
-            'enableRotation' => true,  // Enable log rotation
-        ],
-    ],
-],
-```
-
-### Usage Examples
-
-#### Using Database with Pool
-
-```php
-// Connection automatically acquired from pool
-$users = User::find()->all();
-
-// Connection automatically returned to pool after request
-```
-
-#### Using Redis
-
-```php
-// Get from pool
-$value = Yii::$app->redis->get('key');
-
-// Set value
-Yii::$app->redis->set('key', 'value');
-
-// Connection returned to pool automatically
-```
-
-#### Using Cache
-
-```php
-// Set cache with TTL
-Yii::$app->cache->set('key', 'value', 3600);
-
-// Get cache
-$value = Yii::$app->cache->get('key');
-
-// Multi-set
-Yii::$app->cache->multiSet([
-    'user:1' => ['id' => 1, 'name' => 'Alice'],
-    'user:2' => ['id' => 2, 'name' => 'Bob'],
-], 3600);
-
-// Multi-get
-$users = Yii::$app->cache->multiGet(['user:1', 'user:2']);
-
-// Connection pool shared with redis component
-```
-
-#### HTTP Client
-
-```php
-use Dacheng\Yii2\Swoole\HttpClient\CoroutineClient;
-
-// Create client instance
-$client = new CoroutineClient([
-    'baseUrl' => 'https://api.example.com',
-]);
-
-// GET request
-$response = $client->get('users', ['page' => 1])->send();
-if ($response->isOk) {
-    $data = $response->data;
-}
-
-// POST request with JSON
-$response = $client->post('users', ['name' => 'John'])
-    ->setFormat(CoroutineClient::FORMAT_JSON)
-    ->send();
-
-// Batch requests (parallel execution with coroutines)
-$requests = [
-    'users' => $client->get('users'),
-    'posts' => $client->get('posts'),
-    'comments' => $client->get('comments'),
-];
-$responses = $client->batchSend($requests);
-
-// Custom headers
-$response = $client->get('protected')
-    ->addHeaders([
-        'Authorization' => 'Bearer token123',
-        'X-Custom-Header' => 'value',
-    ])
-    ->send();
-```
-
-#### Queue Jobs
-
-Define a job:
-
-```php
-namespace app\jobs;
-
-use yii\base\BaseObject;
-use yii\queue\JobInterface;
-
-class EmailJob extends BaseObject implements JobInterface
-{
-    public $to;
-    public $subject;
-    public $body;
-    
-    public function execute($queue)
-    {
-        // Send email
-        Yii::$app->mailer->compose()
-            ->setTo($this->to)
-            ->setSubject($this->subject)
-            ->setTextBody($this->body)
-            ->send();
-    }
-}
-```
-
-Push to queue:
-
-```php
-Yii::$app->queue->push(new EmailJob([
-    'to' => 'user@example.com',
-    'subject' => 'Test',
-    'body' => 'Hello!',
-]));
-```
-
-Process queue:
-
-```bash
-# Process all jobs and exit
-php yii queue/run
-
-# Listen for new jobs (daemon mode)
-php yii queue/listen
-```
-
-#### Concurrent Processing
-
-```php
-use Swoole\Coroutine;
-
-// Execute multiple operations concurrently
-Coroutine::create(function() {
-    $user = User::findOne(1);
-    // Process user
-});
-
-Coroutine::create(function() {
-    $posts = Post::find()->all();
-    // Process posts
-});
-
-// Both queries execute concurrently using connection pool
-```
-
-## 🔧 Commands
-
-### Server Commands
-
-```bash
-# Start server
-php yii swoole/start
-
-# Start on custom host/port
-php yii swoole/start 0.0.0.0 8080
-
-# Stop server
 php yii swoole/stop
 ```
 
-### Queue Commands
+## 在业务代码中使用
 
-```bash
-# Process waiting jobs once
-php yii queue/run
+配置完成后，业务层仍按 Yii2 组件方式访问能力：
 
-# Listen for jobs continuously
-php yii queue/listen
+```php
+$rows = Yii::$app->db->createCommand('SELECT * FROM user WHERE status = :status', [
+    ':status' => 1,
+])->queryAll();
 
-# Check queue status
-php yii queue/info
+Yii::$app->redis->set('demo:key', 'value');
 
-# Clear queue
-php yii queue/clear
-
-# Remove specific job
-php yii queue/remove <job-id>
+Yii::$app->queue->push(new SendEmailJob([
+    'email' => 'user@example.com',
+]));
 ```
 
-## 📊 Performance
+这些调用运行在 Swoole 协程环境中，并通过对应的协程组件和连接池执行。
 
-> TODO: Benchmark data TBD
+## 适用场景
 
-### When to Use
+适合：
 
-✅ **Best for:**
-- API servers
-- Microservices
-- High-concurrency applications
-- I/O-bound workloads
+- API 服务
+- 微服务
+- 高并发 I/O 密集应用
+- 希望保留 Yii2 编程模型，同时使用 Swoole 协程能力的项目
 
-❌ **Not ideal for:**
-- CPU-intensive tasks (use workers instead)
-- Simple low-traffic sites
-- Shared hosting environments
+不适合：
 
-## 📝 License
+- CPU 密集型任务
+- 不需要常驻进程的简单低流量站点
+- 期望完整替代 Yii2 或完整封装所有 Swoole 能力的项目
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## License
 
-## 🙏 Acknowledgments
-
-- [Swoole](https://github.com/swoole/swoole-src) - Coroutine PHP framework
-- [Yii2](https://github.com/yiisoft/yii2) - High-performance PHP framework
-- [yii2-queue](https://github.com/yiisoft/yii2-queue) - Queue extension for Yii2
-- [yii2-redis](https://github.com/yiisoft/yii2-redis) - Redis extension for Yii2
-
-## 💬 Support
-
-- Create an [Issue](https://github.com/dacheng-php/yii2-swoole/issues) for bug reports
-- Start a [Discussion](https://github.com/dacheng-php/yii2-swoole/discussions) for questions
-- Check [Wiki](https://github.com/dacheng-php/yii2-swoole/wiki) for detailed docs
-
----
-
-Made with ❤️ by the dacheng-php team
+MIT
