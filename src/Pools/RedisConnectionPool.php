@@ -76,60 +76,6 @@ final class RedisConnectionPool extends AbstractConnectionPool
     }
 
     /**
-     * Releases a connection back to pool.
-     * Validates connection and creates a new one if invalid.
-     *
-     * @param mixed $connection The connection to release
-     */
-    public function release($connection): void
-    {
-        if (!$this->isValidConnection($connection)) {
-            $this->closeConnection($connection);
-            try {
-                $connection = $this->createConnection();
-            } catch (PoolCreationException $e) {
-                // Failed to create replacement connection - pool may be exhausted
-                // Log warning but don't throw, allowing the pool to recover later
-                \Yii::warning(
-                    sprintf('Failed to create replacement Redis connection: %s', $e->getMessage()),
-                    __METHOD__
-                );
-                return;
-            }
-        }
-
-        try {
-            $this->pushConnection($connection);
-        } catch (PoolClosedException $e) {
-            // pushConnection() already closes the connection when the pool is closed.
-        }
-    }
-
-    /**
-     * Discards a connection and replaces it with a new one.
-     * Use this when a connection has encountered an error.
-     *
-     * @param mixed $connection The connection to discard
-     */
-    public function discard($connection): void
-    {
-        $this->closeConnection($connection);
-
-        try {
-            $newConnection = $this->createConnection();
-            $this->pushConnection($newConnection);
-        } catch (PoolCreationException $e) {
-            // Failed to create replacement connection
-            \Yii::warning(
-                sprintf('Failed to create replacement Redis connection during discard: %s', $e->getMessage()),
-                __METHOD__
-            );
-        } catch (PoolClosedException $e) {
-            // Pool was closed during discard; pushConnection() already closed the replacement.
-        }
-    }
-
-    /**
      * Checks if health checking is enabled.
      *
      * @return bool True if health check is enabled

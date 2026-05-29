@@ -58,22 +58,57 @@ abstract class AbstractConnectionPool
         // Create all connections in a temporary array first to ensure atomic initialization
         // If any connection fails, we clean up all created connections before throwing
         $connections = [];
+        $errors = [];
+        $cid = \Swoole\Coroutine::getCid();
+
         try {
-            for ($i = 0; $i < $this->maxActive; $i++) {
-                $connections[] = $this->createConnection();
+            if ($cid >= 0) {
+                // Concurrent connection creation in a coroutine context using WaitGroup
+                $wg = new \Swoole\Coroutine\WaitGroup();
+                // Pre-fill the array to hold correct slots
+                $connections = array_fill(0, $this->maxActive, null);
+
+                for ($i = 0; $i < $this->maxActive; $i++) {
+                    $wg->add();
+                    \Swoole\Coroutine::create(function () use ($i, $wg, &$connections, &$errors) {
+                        try {
+                            $connections[$i] = $this->createConnection();
+                        } catch (\Throwable $exception) {
+                            $errors[] = $exception;
+                        } finally {
+                            $wg->done();
+                        }
+                    });
+                }
+
+                $wg->wait();
+
+                // If any error occurred during concurrent creation, throw the first error to trigger cleanup
+                if (!empty($errors)) {
+                    throw reset($errors);
+                }
+            } else {
+                // Sequential fallback outside a coroutine context
+                for ($i = 0; $i < $this->maxActive; $i++) {
+                    $connections[] = $this->createConnection();
+                }
             }
 
             // All connections created successfully, now add them to the pool
             foreach ($connections as $connection) {
-                $this->pushConnection($connection);
+                if ($connection !== null) {
+                    $this->pushConnection($connection);
+                }
             }
         } catch (\Throwable $exception) {
             // Clean up any partially created connections
             foreach ($connections as $connection) {
-                try {
-                    $this->closeConnection($connection);
-                } catch (\Throwable) {
-                    // Ignore close errors during cleanup
+                if ($connection !== null) {
+                    try {
+                        $this->closeConnection($connection);
+                    } catch (\Throwable) {
+                        // Ignore close errors during cleanup
+                    }
                 }
             }
             // Also drain the channel in case any were pushed
@@ -121,8 +156,16 @@ abstract class AbstractConnectionPool
             );
         }
 
-        // Connection is null or invalid - create a new one
-        // Note: createConnection() may throw PoolCreationException
+        // Connection is null or invalid. Close it before creating a replacement.
+        if ($connection !== null) {
+            try {
+                $this->closeConnection($connection);
+            } catch (\Throwable) {
+                // Ignore close errors for an already invalid connection.
+            }
+        }
+
+        // Note: createConnection() may throw PoolCreationException.
         return $this->createConnection();
     }
 
@@ -143,6 +186,25 @@ abstract class AbstractConnectionPool
      */
     public function release($connection): void
     {
+        if ($this->isClosed) {
+            try {
+                $this->closeConnection($connection);
+            } catch (\Throwable) {
+                // Ignore close errors after shutdown.
+            }
+            return;
+        }
+
+        if (!$this->isValidConnection($connection)) {
+            try {
+                $this->closeConnection($connection);
+            } catch (\Throwable) {
+                // Ignore close errors for invalid connections.
+            }
+            $this->replaceDiscardedConnection();
+            return;
+        }
+
         $this->pushConnection($connection);
     }
 
@@ -160,6 +222,24 @@ abstract class AbstractConnectionPool
             $this->closeConnection($connection);
         } catch (\Throwable $e) {
             // Ignore close errors for discarded connections
+        }
+
+        $this->replaceDiscardedConnection();
+    }
+
+    protected function replaceDiscardedConnection(): void
+    {
+        if ($this->isClosed) {
+            return;
+        }
+
+        try {
+            $this->pushConnection($this->createConnection());
+        } catch (\Throwable $exception) {
+            \Yii::warning(
+                sprintf('Failed to create replacement %s connection: %s', $this->connectionType, $exception->getMessage()),
+                __METHOD__
+            );
         }
     }
 
@@ -225,10 +305,15 @@ abstract class AbstractConnectionPool
     /**
      * Returns pool statistics.
      *
-     * Note: 'in_use' is an approximation calculated as (capacity - idle).
-     * It does not account for connections currently being created.
+     * Contract:
+     * - created: number of eagerly created pool slots configured for this pool.
+     * - idle: currently available healthy connections in the channel.
+     * - in_use: approximate checked-out connections, calculated as capacity - idle.
+     * - waiters: coroutines waiting on acquire().
+     * - capacity: maximum active connections allowed by configuration.
+     * - closed: whether shutdown() has been called.
      *
-     * @return array{created:int,idle:int,in_use:int,waiters:int,capacity:int}
+     * @return array{created:int,idle:int,in_use:int,waiters:int,capacity:int,closed:bool}
      */
     public function getStats(): array
     {
@@ -240,6 +325,7 @@ abstract class AbstractConnectionPool
             'in_use' => max(0, $this->maxActive - (int) ($stats['queue_num'] ?? 0)),
             'waiters' => (int) ($stats['consumer_num'] ?? 0),
             'capacity' => $this->maxActive,
+            'closed' => $this->isClosed,
         ];
     }
 

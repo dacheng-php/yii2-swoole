@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Session;
 
+use Dacheng\Yii2\Swoole\Coroutine\ResettableInterface;
 use Dacheng\Yii2\Swoole\Redis\CoroutineRedisConnection;
 use Swoole\Coroutine;
 use Yii;
@@ -13,7 +14,7 @@ use yii\redis\Connection as RedisConnection;
 use yii\redis\Session as YiiRedisSession;
 use yii\web\Cookie;
 
-class CoroutineSession extends YiiRedisSession
+class CoroutineSession extends YiiRedisSession implements ResettableInterface
 {
     public bool $autoCloseOnCoroutineEnd = true;
 

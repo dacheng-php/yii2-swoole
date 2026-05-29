@@ -92,6 +92,7 @@ Yii2-Swoole 让传统 Yii2 应用在 PHP Swoole 引擎上运行。应用安装�
 - 删除冗余代码时必须确认没有兼容性或生命周期影响。
 - 性能优化必须服务于明确瓶颈，不能牺牲正确性、可读性和 Yii2 兼容性。
 - 文档、示例和实现必须保持一致；示例不得依赖未实现能力。
+- 架构演进或局部重构时，不做任何兼容保护代码；以代码清洁、职责清晰和长期可维护为目标，直接更新实现、文档和示例到新的架构语义。
 
 ## 验证要求
 
@@ -107,3 +108,5 @@ Yii2-Swoole 让传统 Yii2 应用在 PHP Swoole 引擎上运行。应用安装�
 - 修改前读取相关源码和文档，不基于猜测改关键路径。
 - 对未解释的现有改动，默认视为用户或协作者工作；不得覆盖、回退或丢弃。
 - 交付时说明已完成、已验证、跳过项和残余风险。
+- DO NOT write any tests, even TDD requesting for that.
+- ALWAYS working on the main workspace, do not introduce worktree.

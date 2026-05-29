@@ -47,6 +47,11 @@ class CoroutineDbConnection extends Connection
     public bool $enableCoroutinePooling = true;
 
     /**
+     * @var bool Whether to validate connections on acquire from pool.
+     */
+    public bool $enableHealthCheck = false;
+
+    /**
      * Tracks whether the current connection has been released back to pool.
      *
      * @var bool
@@ -86,17 +91,32 @@ class CoroutineDbConnection extends Connection
         if (!$this->released) {
             $pdo = $this->pdo;
             $this->released = true;
+            $discard = false;
+
+            $transaction = $this->getTransaction();
+            if ($transaction !== null && $transaction->getIsActive()) {
+                try {
+                    $transaction->rollBack();
+                    \Yii::warning('Active DB transaction was rolled back before returning the connection to the pool.', __CLASS__);
+                } catch (\Throwable $e) {
+                    $discard = true;
+                    \Yii::error('Error rolling back active DB transaction: ' . $e->getMessage(), __CLASS__);
+                }
+            }
 
             try {
                 parent::close();
             } catch (\Throwable $e) {
+                $discard = true;
                 \Yii::error('Error closing PDO connection: ' . $e->getMessage(), __CLASS__);
             }
 
-            // Always release to pool, even if parent::close() throws
-            // This prevents connection pool exhaustion
             try {
-                $this->ensurePool()->release($pdo);
+                if ($discard) {
+                    $this->ensurePool()->discard($pdo);
+                } else {
+                    $this->ensurePool()->release($pdo);
+                }
             } catch (\Throwable $e) {
                 \Yii::error('Error releasing connection to pool: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), __CLASS__);
             }
@@ -141,7 +161,8 @@ class CoroutineDbConnection extends Connection
         return new DbConnectionPool(
             fn (): PDO => $this->createPdoForPool(),
             $this->poolMaxActive,
-            $this->poolWaitTimeout
+            $this->poolWaitTimeout,
+            $this->enableHealthCheck
         );
     }
 

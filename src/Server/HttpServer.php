@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Server;
 
+use Dacheng\Yii2\Swoole\Runtime\RequestScope;
 use Swoole\Atomic;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Http\Server as SwooleCoroutineHttpServer;
@@ -32,6 +33,13 @@ class HttpServer extends Component
      * @var bool Whether to enable request tracking for debugging
      */
     public bool $enableRequestTracking = false;
+
+    /**
+     * @var bool Whether to enable Swoole's native C-level static file handler.
+     * When enabled, requests for static files are handled directly by Swoole's C driver,
+     * bypassing the PHP layer completely. Falls back to StaticFileServer if not handled.
+     */
+    public bool $enableNativeStaticHandler = true;
 
     public string $host = '127.0.0.1';
 
@@ -161,6 +169,11 @@ class HttpServer extends Component
                 $server = $this->server;
                 $afterStartEvent();
 
+                // Pre-warm connection pools in coroutine context before handling requests
+                if (method_exists($dispatcher, 'prewarm')) {
+                    $dispatcher->prewarm();
+                }
+
                 $this->server->handle('/', function (Request $request, Response $response) use ($dispatcher, $server): void {
                     $this->handleRequest($request, $response, $dispatcher, $server);
                 });
@@ -196,6 +209,11 @@ class HttpServer extends Component
         }
         if (isset($settings['tcp_fastopen'])) {
             $coroutineSettings['open_tcp_fastopen'] = $settings['tcp_fastopen'];
+        }
+
+        if ($this->enableNativeStaticHandler && $this->documentRoot !== null) {
+            $coroutineSettings['enable_static_handler'] = true;
+            $coroutineSettings['document_root'] = $this->documentRoot;
         }
 
         if ($coroutineSettings !== []) {
@@ -260,7 +278,7 @@ class HttpServer extends Component
      * This method processes each incoming request through the following steps:
      * 1. Set custom server header (if configured)
      * 2. Check for shutdown request
-     * 3. Initialize request context for debugging
+     * 3. Initialize request scope
      * 4. Track active request count
      * 5. Serve static files or dispatch to Yii2
      * 6. Handle errors and cleanup
@@ -289,8 +307,7 @@ class HttpServer extends Component
             return;
         }
 
-        // Initialize request context for debugging
-        $requestId = $this->initializeRequestContext($request);
+        $requestScope = $this->enableRequestTracking ? RequestScope::start($request) : null;
 
         // Track active requests (coroutine-safe)
         $this->activeRequests?->add(1);
@@ -304,75 +321,39 @@ class HttpServer extends Component
             // Process through middleware pipeline, then dispatch to Yii2
             $dispatcher->dispatch($request, $response, $server);
         } catch (\Throwable $e) {
-            if (method_exists($response, 'isWritable') && !$response->isWritable()) {
+            if (!$response->isWritable()) {
                 return;
             }
 
             $response->status(500);
             $response->header('Content-Type', 'text/plain; charset=UTF-8');
-            $body = $this->formatErrorResponse($e, $requestId);
+            $body = $this->formatErrorResponse($e);
             $response->end($body);
         } finally {
+            $requestScope?->clear();
             $this->activeRequests?->sub(1);
-            $this->cleanupRequestContext();
         }
-    }
-
-    /**
-     * Initializes request context for debugging.
-     *
-     * @param Request $request The HTTP request
-     * @return string The request ID
-     */
-    private function initializeRequestContext(Request $request): string
-    {
-        if (!$this->enableRequestTracking) {
-            return '';
-        }
-
-        $requestId = uniqid('req_', true);
-        $context = Coroutine::getContext();
-        $context['request_id'] = $requestId;
-        $context['request_start'] = microtime(true);
-        $context['request_uri'] = $request->server['request_uri'] ?? '/';
-
-        return $requestId;
-    }
-
-    /**
-     * Cleans up request context.
-     */
-    private function cleanupRequestContext(): void
-    {
-        if (!$this->enableRequestTracking) {
-            return;
-        }
-
-        $context = Coroutine::getContext();
-        unset($context['request_id'], $context['request_start'], $context['request_uri']);
     }
 
     /**
      * Formats error response with debugging information.
      *
      * @param \Throwable $e The exception
-     * @param string $requestId The request ID
      * @return string The formatted error response
      */
-    private function formatErrorResponse(\Throwable $e, string $requestId): string
+    private function formatErrorResponse(\Throwable $e): string
     {
         if (!defined('YII_DEBUG') || !YII_DEBUG) {
             return 'Internal Server Error';
         }
 
         $output = "Error: {$e->getMessage()}\n\n";
-        $output .= "Request ID: {$requestId}\n";
+        $requestScope = $this->enableRequestTracking ? RequestScope::current() : null;
+        $output .= "Request ID: " . ($requestScope?->requestId ?? '') . "\n";
         $output .= "Coroutine ID: " . Coroutine::getCid() . "\n";
 
-        // Add pool statistics if available
-        $context = Coroutine::getContext();
-        if (isset($context['request_uri'])) {
-            $output .= "URI: {$context['request_uri']}\n";
+        if ($requestScope !== null) {
+            $output .= "URI: {$requestScope->uri}\n";
         }
 
         $output .= "\nStack Trace:\n" . $e->getTraceAsString();

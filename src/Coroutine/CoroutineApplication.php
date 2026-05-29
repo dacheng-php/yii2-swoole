@@ -8,6 +8,7 @@ use Closure;
 use Swoole\Coroutine;
 use Yii;
 use yii\base\InvalidConfigException;
+use yii\base\Component;
 use yii\db\ConnectionInterface;
 use yii\redis\Connection as RedisConnection;
 use yii\web\Application;
@@ -32,7 +33,6 @@ use yii\web\Application;
  * ```
  *
  * @property array $sharedComponentIds Component IDs that remain shared across coroutines
- * @property array $persistentComponentIds Component IDs that persist across context resets
  * @property array $connectionComponentClasses Classes that should be closed first during reset
  */
 class CoroutineApplication extends Application
@@ -50,14 +50,6 @@ class CoroutineApplication extends Application
         'log',
         'errorHandler',
         'urlManager',
-    ];
-
-    /**
-     * @var string[] Component IDs that should not be cleared during context reset.
-     * These components may have state that should persist across requests.
-     */
-    public array $persistentComponentIds = [
-        'queue',
     ];
 
     /**
@@ -142,9 +134,10 @@ class CoroutineApplication extends Application
     }
 
     /**
-     * Clears coroutine-bound components and resets per-request application state.
+     * Releases resources held by coroutine-bound request components.
      *
-     * This method uses a three-phase cleanup strategy to ensure proper resource management:
+     * This method must run before request/response components are cleared because those
+     * components still live in the coroutine component store.
      *
      * **Phase 1: Close connection components first**
      * - DB and Redis connections must be returned to pools before other cleanup
@@ -154,18 +147,10 @@ class CoroutineApplication extends Application
      * - Components like User have state that needs controlled reset
      * - Reset implementations should avoid relying on request-owned connections
      *
-     * **Phase 3: Clean up remaining components**
-     * - Generic cleanup for components with close/reset/clear methods
-     * - Persistent components (e.g., queue) are skipped
-     *
-     * **Phase 4: Clear stores and application state**
-     * - Final cleanup of component store and application-level state
-     *
      * @see ResettableInterface
      * @see $connectionComponentClasses
-     * @see $persistentComponentIds
      */
-    public function resetCoroutineContext(): void
+    public function releaseCoroutineComponents(): void
     {
         if (!$this->isCoroutineContext()) {
             return;
@@ -179,9 +164,16 @@ class CoroutineApplication extends Application
 
         // Phase 2: Reset components implementing ResettableInterface (e.g., User)
         $this->resetResettableComponents($store, $processed);
+    }
 
-        // Phase 3: Clean up remaining components (skip persistent and already processed)
-        $this->cleanupRemainingComponents($store, $processed);
+    /**
+     * Clears coroutine-bound components and per-request application state.
+     */
+    public function clearCoroutineContext(): void
+    {
+        if (!$this->isCoroutineContext()) {
+            return;
+        }
 
         $this->setCoroutineComponentStore([]);
 
@@ -241,35 +233,6 @@ class CoroutineApplication extends Application
     }
 
     /**
-     * Cleans up remaining components via close/reset/clear methods.
-     *
-     * @param array $store The component store
-     * @param array $processed Track processed component IDs
-     */
-    private function cleanupRemainingComponents(array $store, array &$processed): void
-    {
-        foreach ($store as $id => $component) {
-            if (!is_object($component) || isset($processed[$id])) {
-                continue;
-            }
-
-            // Skip persistent components
-            if ($this->isPersistentComponent($id)) {
-                continue;
-            }
-
-            // Try cleanup methods in order of preference
-            if (method_exists($component, 'close')) {
-                $this->safeClose($component, $id);
-            } elseif (method_exists($component, 'reset')) {
-                $this->safeReset($component, $id);
-            } elseif (method_exists($component, 'clear')) {
-                $this->safeClear($component, $id);
-            }
-        }
-    }
-
-    /**
      * Checks if a component is a connection that should be closed first.
      *
      * @param object $component The component to check
@@ -317,21 +280,6 @@ class CoroutineApplication extends Application
     }
 
     /**
-     * Safely clears a component, catching any exceptions.
-     *
-     * @param object $component The component to clear
-     * @param string $id The component ID (for logging)
-     */
-    private function safeClear(object $component, string $id): void
-    {
-        try {
-            $component->clear();
-        } catch (\Throwable $e) {
-            \Yii::error("Error clearing component '{$id}': " . $e->getMessage(), __METHOD__);
-        }
-    }
-
-    /**
      * Checks if a component ID should remain shared across coroutines.
      *
      * @param string $id The component ID
@@ -340,17 +288,6 @@ class CoroutineApplication extends Application
     protected function isSharedComponent(string $id): bool
     {
         return in_array($id, $this->sharedComponentIds, true);
-    }
-
-    /**
-     * Checks if a component ID should persist across context resets.
-     *
-     * @param string $id The component ID
-     * @return bool True if the component should persist
-     */
-    protected function isPersistentComponent(string $id): bool
-    {
-        return in_array($id, $this->persistentComponentIds, true);
     }
 
     /**
@@ -416,6 +353,11 @@ class CoroutineApplication extends Application
             return clone $definition;
         }
 
-        return Yii::createObject($definition);
+        $component = Yii::createObject($definition);
+        if (!$component instanceof Component) {
+            throw new InvalidConfigException('Coroutine component definitions must create yii\\base\\Component instances.');
+        }
+
+        return $component;
     }
 }

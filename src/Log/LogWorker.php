@@ -155,7 +155,9 @@ class LogWorker
             if (!$this->running) {
                 return;
             }
-            $this->writeBufferedMessages();
+            \Swoole\Coroutine::create(function (): void {
+                $this->writeBufferedMessages();
+            });
         });
     }
 
@@ -300,9 +302,15 @@ class LogWorker
             return;
         }
 
-        $success = @file_put_contents($this->logFile, $text, FILE_APPEND | LOCK_EX);
+        $inCoroutine = \Swoole\Coroutine::getCid() >= 0;
 
-        if ($success === false) {
+        if ($inCoroutine) {
+            $success = \Swoole\Coroutine\System::writeFile($this->logFile, $text, FILE_APPEND);
+        } else {
+            $success = @file_put_contents($this->logFile, $text, FILE_APPEND | LOCK_EX) !== false;
+        }
+
+        if (!$success) {
             // Use error_log here to avoid recursion in logging system
             error_log("LogWorker: Unable to write to log file: {$this->logFile}");
             return;
@@ -313,7 +321,7 @@ class LogWorker
         }
 
         if ($this->enableRotation) {
-            clearstatcache();
+            clearstatcache(true, $this->logFile);
             $fileSize = @filesize($this->logFile);
             if ($fileSize !== false && $fileSize > $this->maxFileSize * 1024) {
                 $this->rotateFiles();
