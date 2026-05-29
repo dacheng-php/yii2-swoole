@@ -24,12 +24,12 @@ class SiteController extends Controller
     {
         return $this->asJson([
             'message' => 'Welcome to Yii2 Swoole HTTP Server!',
-            'timestamp' => time(),
-            'server' => 'Swoole ' . swoole_version(),
+            'time' => date('Y-m-d H:i:s'),
+            'swoole' => swoole_version(),
             'yii' => Yii::getVersion(),
         ]);
     }
-    
+
     /**
      * Memory diagnostic endpoint
      */
@@ -41,12 +41,12 @@ class SiteController extends Controller
         if (Yii::$app->has('log')) {
             $logger = Yii::$app->log->getLogger();
             $loggerMessages = count($logger->messages ?? []);
-            
+
             foreach (Yii::$app->log->targets as $name => $target) {
                 $targetMessages[$name] = count($target->messages ?? []);
             }
         }
-        
+
         // Get component counts to see what's loaded
         $componentCounts = [];
         if (method_exists(Yii::$app, 'getComponents')) {
@@ -57,7 +57,7 @@ class SiteController extends Controller
                 }
             }
         }
-        
+
         // Check cache type
         $cacheClass = 'not set';
         if (Yii::$app->has('cache')) {
@@ -66,7 +66,7 @@ class SiteController extends Controller
                 $cacheClass = get_class($cache);
             }
         }
-        
+
         return $this->asJson([
             'memory' => [
                 'current' => round(memory_get_usage(true) / 1024 / 1024, 2) . ' MB',
@@ -88,7 +88,7 @@ class SiteController extends Controller
             ],
         ]);
     }
-    
+
     /**
      * Force garbage collection endpoint
      */
@@ -98,7 +98,7 @@ class SiteController extends Controller
         $cycles = gc_collect_cycles();
         $after = memory_get_usage(true);
         $freed = $before - $after;
-        
+
         return $this->asJson([
             'cycles_collected' => $cycles,
             'memory_freed' => round($freed / 1024 / 1024, 2) . ' MB',
@@ -106,7 +106,7 @@ class SiteController extends Controller
             'memory_after' => round($after / 1024 / 1024, 2) . ' MB',
         ]);
     }
-    
+
     /**
      * DB Connection Pool Stats
      */
@@ -115,12 +115,12 @@ class SiteController extends Controller
         $dbStats = null;
         $redisStats = null;
         $hasDb = false;
-        
+
         // Check if this coroutine has a DB instance
         if (Yii::$app instanceof \Dacheng\Yii2\Swoole\Coroutine\CoroutineApplication) {
             $hasDb = Yii::$app->has('db', true);  // Check if instance exists
         }
-        
+
         if (Yii::$app->has('db')) {
             try {
                 $db = Yii::$app->get('db', false);
@@ -132,7 +132,7 @@ class SiteController extends Controller
                 $dbStats = ['error' => $e->getMessage()];
             }
         }
-        
+
         if (Yii::$app->has('redis')) {
             try {
                 $redis = Yii::$app->get('redis', false);
@@ -144,7 +144,7 @@ class SiteController extends Controller
                 $redisStats = ['error' => $e->getMessage()];
             }
         }
-        
+
         return $this->asJson([
             'db_pool' => $dbStats,
             'redis_pool' => $redisStats,
@@ -152,7 +152,7 @@ class SiteController extends Controller
             'coroutine_id' => \Swoole\Coroutine::getCid(),
         ]);
     }
-    
+
     /**
      * Test endpoint - explicitly close DB after use
      */
@@ -160,12 +160,12 @@ class SiteController extends Controller
     {
         // Use the DB
         $row = Yii::$app->db->createCommand('SELECT 1 as num')->queryOne();
-        
+
         // Explicitly close it
         if (method_exists(Yii::$app->db, 'close')) {
             Yii::$app->db->close();
         }
-        
+
         return $this->asJson([
             'result' => $row,
             'db_closed' => true,
@@ -239,11 +239,11 @@ class SiteController extends Controller
      */
     public function actionSleep()
     {
-        $seconds = (int) Yii::$app->request->get('seconds', 1);
+        $seconds = (int)Yii::$app->request->get('seconds', 1);
         $seconds = min($seconds, 5); // Max 5 seconds
-        
+
         \Swoole\Coroutine::sleep($seconds);
-        
+
         return $this->asJson([
             'message' => "Slept for {$seconds} seconds using coroutine",
             'timestamp' => time(),

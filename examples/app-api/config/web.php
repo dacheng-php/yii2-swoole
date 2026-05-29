@@ -8,6 +8,7 @@ $config = [
     'bootstrap' => ['log'],
     'components' => [
         'request' => [
+            'class' => \Dacheng\Yii2\Swoole\Runtime\CoroutineRequest::class,
             'cookieValidationKey' => 'test-secret-key',
             'enableCsrfValidation' => false,
             'parsers' => [
