@@ -43,6 +43,10 @@ return [
         ],
     ],
     'components' => [
+        'request' => [
+            'class' => \Dacheng\Yii2\Swoole\Runtime\CoroutineRequest::class,
+            'cookieValidationKey' => 'change-me',
+        ],
         'swooleHttpServer' => [
             'class' => \Dacheng\Yii2\Swoole\Server\HttpServer::class,
             'host' => '127.0.0.1',
