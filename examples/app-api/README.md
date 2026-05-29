@@ -222,7 +222,7 @@ YII_SESSION_TIMEOUT=1440
 | Redis Pool | `RedisController` | Connection pooling, concurrent access, benchmarks |
 | Cache Pool | `CacheController` | Coroutine-safe cache with Redis backend |
 | DB Pool | `UserController` | Database connection pooling, user queries |
-| Session | `SessionController` | Coroutine-safe session storage via Redis |
+| Session | `SessionController` | Coroutine-safe session storage via Redis (`Yii::$app->session`) |
 | Queue | `QueueController` | Background job processing with coroutines |
 | Logging | `LogController` | Async logging with coroutine channels |
 

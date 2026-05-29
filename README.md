@@ -130,6 +130,8 @@ Yii::$app->queue->push(new SendEmailJob([
 
 这些调用运行在 Swoole 协程环境中，并通过对应的协程组件和连接池执行。
 
+会话请通过 `Yii::$app->session` 访问；协程环境下不要直接依赖 `$_SESSION` 共享状态。
+
 ## 适用场景
 
 适合：
