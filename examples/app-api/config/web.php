@@ -41,6 +41,12 @@ $config = [
                     'maxFileSize' => 10240, // 10MB
                     'maxLogFiles' => 5,
                     'enableRotation' => true,
+                    'logWorkerConfig' => [
+                        'batchInterval' => (int)(getenv('YII_LOG_BATCH_INTERVAL') ?: 100),
+                        'maxBufferSize' => (int)(getenv('YII_LOG_MAX_BUFFER_SIZE') ?: 100000),
+                        'bufferWarningThreshold' => (int)(getenv('YII_LOG_BUFFER_WARNING_THRESHOLD') ?: 90000),
+                        'maxBufferWarnings' => (int)(getenv('YII_LOG_MAX_BUFFER_WARNINGS') ?: 10),
+                    ],
                     'categories' => [],
                     'except' => [],
                     'logVars' => [],

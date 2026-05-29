@@ -35,6 +35,7 @@ class CoroutineFileTarget extends Target
     public $maxLogFiles = 5;
     public $fileMode;
     public $dirMode = 0775;
+    public array $logWorkerConfig = [];
 
     private ?LogWorker $worker = null;
     private bool $initialized = false;
@@ -71,7 +72,8 @@ class CoroutineFileTarget extends Target
             $this->maxFileSize,
             $this->maxLogFiles,
             $this->fileMode,
-            $this->dirMode
+            $this->dirMode,
+            $this->logWorkerConfig
         );
 
         $this->worker->start();
@@ -104,8 +106,8 @@ class CoroutineFileTarget extends Target
         try {
             $pushed = $this->worker->pushMessages($formattedMessages);
 
-            if (!$pushed) {
-                $this->writeFormattedMessages($formattedMessages);
+            if ($pushed < count($formattedMessages)) {
+                $this->writeFormattedMessages(array_slice($formattedMessages, $pushed));
             }
         } catch (\Throwable $e) {
             $this->writeFormattedMessages($formattedMessages);

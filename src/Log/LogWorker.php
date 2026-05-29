@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Dacheng\Yii2\Swoole\Log;
 
 use Swoole\Timer;
+use yii\base\InvalidConfigException;
 
 /**
  * LogWorker handles asynchronous file writing using a direct buffer approach.
@@ -127,6 +128,31 @@ class LogWorker
         }
         if (isset($config['onBufferOverflow']) && is_callable($config['onBufferOverflow'])) {
             $this->onBufferOverflow = $config['onBufferOverflow'];
+        }
+
+        $this->validateConfig();
+    }
+
+    private function validateConfig(): void
+    {
+        if ($this->batchInterval < 1) {
+            throw new InvalidConfigException('"batchInterval" must be greater than or equal to 1 millisecond.');
+        }
+
+        if ($this->maxBufferSize < 1) {
+            throw new InvalidConfigException('"maxBufferSize" must be greater than or equal to 1.');
+        }
+
+        if ($this->bufferWarningThreshold < 0) {
+            throw new InvalidConfigException('"bufferWarningThreshold" must be greater than or equal to 0.');
+        }
+
+        if ($this->bufferWarningThreshold > $this->maxBufferSize) {
+            throw new InvalidConfigException('"bufferWarningThreshold" must be less than or equal to "maxBufferSize".');
+        }
+
+        if ($this->maxBufferWarnings < 0) {
+            throw new InvalidConfigException('"maxBufferWarnings" must be greater than or equal to 0.');
         }
     }
 
