@@ -97,6 +97,16 @@ trait PoolManager
     }
 
     /**
+     * Returns statistics for this connection's pool.
+     *
+     * @return array{created:int,idle:int,in_use:int,waiters:int,capacity:int,closed:bool}
+     */
+    public function getPoolStats(): array
+    {
+        return $this->ensurePool()->getStats();
+    }
+
+    /**
      * Builds a unique key for connection pool.
      *
      * The key should include all configuration parameters that affect

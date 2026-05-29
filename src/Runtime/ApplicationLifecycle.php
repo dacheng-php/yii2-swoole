@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Runtime;
 
+use Dacheng\Yii2\Swoole\Cache\CoroutineRedisCache;
 use Dacheng\Yii2\Swoole\Coroutine\CoroutineApplication;
+use Dacheng\Yii2\Swoole\Db\CoroutineDbConnection;
+use Dacheng\Yii2\Swoole\Redis\CoroutineRedisConnection;
 use Throwable;
 use Yii;
 use yii\web\CookieCollection;
@@ -26,10 +29,12 @@ final class ApplicationLifecycle
     public function cleanup(CoroutineApplication $app): void
     {
         $app->releaseCoroutineComponents();
+        $this->releaseLoadedSharedComponents($app);
         $this->clearResponse($app);
         $this->clearRequest($app);
         $this->flushLogger($app);
         $this->resetView($app);
+        $this->clearConnectionRuntimeState();
         $app->clearCoroutineContext();
     }
 
@@ -119,6 +124,28 @@ final class ApplicationLifecycle
             $store['view']->params = [];
         } catch (Throwable $e) {
             Yii::error('Error resetting view params: ' . $e->getMessage(), __CLASS__);
+        }
+    }
+
+    private function clearConnectionRuntimeState(): void
+    {
+        CoroutineDbConnection::clearCoroutineRuntimeState();
+        CoroutineRedisConnection::clearCoroutineRuntimeState();
+        CoroutineRedisCache::clearCoroutineRuntimeState();
+    }
+
+    private function releaseLoadedSharedComponents(CoroutineApplication $app): void
+    {
+        foreach ($app->getComponents(false) as $id => $component) {
+            try {
+                if ($component instanceof CoroutineRedisCache) {
+                    $component->reset();
+                } elseif ($component instanceof CoroutineDbConnection || $component instanceof CoroutineRedisConnection) {
+                    $component->close();
+                }
+            } catch (Throwable $e) {
+                Yii::error("Error releasing shared component '{$id}': " . $e->getMessage(), __METHOD__);
+            }
         }
     }
 }

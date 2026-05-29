@@ -8,7 +8,10 @@ use Dacheng\Yii2\Swoole\Pools\DbConnectionPool;
 use Dacheng\Yii2\Swoole\Pools\PoolManager;
 use PDO;
 use Swoole\Coroutine;
+use Yii;
+use yii\caching\CacheInterface;
 use yii\db\Connection;
+use yii\db\Transaction;
 
 /**
  * CoroutineDbConnection provides connection pooling for database access in Swoole coroutine context.
@@ -31,6 +34,8 @@ class CoroutineDbConnection extends Connection
 {
     use PoolManager;
 
+    private const CONTEXT_STATE_KEY = '__yiiSwooleDbConnectionState';
+
     /**
      * Maximum number of connections in the pool.
      */
@@ -52,15 +57,81 @@ class CoroutineDbConnection extends Connection
     public bool $enableHealthCheck = false;
 
     /**
-     * Tracks whether the current connection has been released back to pool.
+     * Runtime state used outside Swoole coroutine contexts.
      *
-     * @var bool
+     * @var array<string, mixed>
      */
-    private bool $released = false;
+    private array $runtimeState = [
+        'pdo' => null,
+        'released' => false,
+        'transaction' => null,
+        'queryCacheInfo' => [],
+    ];
+
+    public function init(): void
+    {
+        parent::init();
+        unset($this->pdo);
+    }
+
+    public function __get($name)
+    {
+        if ($name === 'pdo') {
+            return $this->getRuntimeValue('pdo');
+        }
+
+        return parent::__get($name);
+    }
+
+    public function __set($name, $value): void
+    {
+        if ($name === 'pdo') {
+            $this->setRuntimeValue('pdo', $value);
+
+            return;
+        }
+
+        parent::__set($name, $value);
+    }
+
+    public function __isset($name): bool
+    {
+        if ($name === 'pdo') {
+            return $this->getRuntimeValue('pdo') !== null;
+        }
+
+        return parent::__isset($name);
+    }
+
+    public function __unset($name): void
+    {
+        if ($name === 'pdo') {
+            $this->setRuntimeValue('pdo', null);
+
+            return;
+        }
+
+        parent::__unset($name);
+    }
+
+    public function getIsActive()
+    {
+        return $this->getRuntimeValue('pdo') !== null;
+    }
+
+    public static function clearCoroutineRuntimeState(): void
+    {
+        if (Coroutine::getCid() < 0) {
+            return;
+        }
+
+        $context = Coroutine::getContext();
+        unset($context[self::CONTEXT_STATE_KEY]);
+    }
 
     public function open(): void
     {
-        if ($this->pdo !== null) {
+        if ($this->getRuntimeValue('pdo') !== null) {
             return;
         }
 
@@ -70,8 +141,8 @@ class CoroutineDbConnection extends Connection
             return;
         }
 
-        $this->pdo = $this->ensurePool()->acquire();
-        $this->released = false;
+        $this->setRuntimeValue('pdo', $this->ensurePool()->acquire());
+        $this->setRuntimeValue('released', false);
 
         $this->trigger(self::EVENT_AFTER_OPEN);
     }
@@ -84,13 +155,13 @@ class CoroutineDbConnection extends Connection
             return;
         }
 
-        if ($this->pdo === null) {
+        $pdo = $this->getRuntimeValue('pdo');
+        if ($pdo === null) {
             return;
         }
 
-        if (!$this->released) {
-            $pdo = $this->pdo;
-            $this->released = true;
+        if (!$this->getRuntimeValue('released')) {
+            $this->setRuntimeValue('released', true);
             $discard = false;
 
             $transaction = $this->getTransaction();
@@ -104,12 +175,9 @@ class CoroutineDbConnection extends Connection
                 }
             }
 
-            try {
-                parent::close();
-            } catch (\Throwable $e) {
-                $discard = true;
-                \Yii::error('Error closing PDO connection: ' . $e->getMessage(), __CLASS__);
-            }
+            $this->setRuntimeValue('transaction', null);
+            $this->setRuntimeValue('queryCacheInfo', []);
+            $this->setRuntimeValue('pdo', null);
 
             try {
                 if ($discard) {
@@ -121,17 +189,119 @@ class CoroutineDbConnection extends Connection
                 \Yii::error('Error releasing connection to pool: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), __CLASS__);
             }
         } else {
-            parent::close();
+            $this->setRuntimeValue('pdo', null);
         }
     }
 
     public function reset(): void
     {
-        if ($this->pdo !== null && !$this->released) {
+        if ($this->getRuntimeValue('pdo') !== null && !$this->getRuntimeValue('released')) {
             $this->close();
         }
-        $this->released = false;
-        $this->pdo = null;
+
+        $this->setRuntimeValue('released', false);
+        $this->setRuntimeValue('transaction', null);
+        $this->setRuntimeValue('queryCacheInfo', []);
+        $this->setRuntimeValue('pdo', null);
+    }
+
+    public function getTransaction()
+    {
+        $transaction = $this->getRuntimeValue('transaction');
+
+        return $transaction instanceof Transaction && $transaction->getIsActive() ? $transaction : null;
+    }
+
+    public function beginTransaction($isolationLevel = null)
+    {
+        $this->open();
+
+        if (($transaction = $this->getTransaction()) === null) {
+            $transaction = new Transaction(['db' => $this]);
+            $this->setRuntimeValue('transaction', $transaction);
+        }
+
+        $transaction->begin($isolationLevel);
+
+        return $transaction;
+    }
+
+    public function transaction(callable $callback, $isolationLevel = null)
+    {
+        $transaction = $this->beginTransaction($isolationLevel);
+        $level = $transaction->level;
+
+        try {
+            $result = call_user_func($callback, $this);
+            if ($transaction->isActive && $transaction->level === $level) {
+                $transaction->commit();
+            }
+        } catch (\Exception $e) {
+            $this->rollbackTransactionOnLevel($transaction, $level);
+            throw $e;
+        } catch (\Throwable $e) {
+            $this->rollbackTransactionOnLevel($transaction, $level);
+            throw $e;
+        }
+
+        return $result;
+    }
+
+    public function cache(callable $callable, $duration = null, $dependency = null)
+    {
+        $stack = $this->getRuntimeValue('queryCacheInfo');
+        $stack[] = [$duration === null ? $this->queryCacheDuration : $duration, $dependency];
+        $this->setRuntimeValue('queryCacheInfo', $stack);
+
+        try {
+            return call_user_func($callable, $this);
+        } finally {
+            $this->popQueryCacheInfo();
+        }
+    }
+
+    public function noCache(callable $callable)
+    {
+        $stack = $this->getRuntimeValue('queryCacheInfo');
+        $stack[] = false;
+        $this->setRuntimeValue('queryCacheInfo', $stack);
+
+        try {
+            return call_user_func($callable, $this);
+        } finally {
+            $this->popQueryCacheInfo();
+        }
+    }
+
+    public function getQueryCacheInfo($duration, $dependency)
+    {
+        if (!$this->enableQueryCache) {
+            return null;
+        }
+
+        $stack = $this->getRuntimeValue('queryCacheInfo');
+        $info = end($stack);
+        if (is_array($info)) {
+            if ($duration === null) {
+                $duration = $info[0];
+            }
+            if ($dependency === null) {
+                $dependency = $info[1];
+            }
+        }
+
+        if ($duration === 0 || $duration > 0) {
+            if (is_string($this->queryCache) && Yii::$app) {
+                $cache = Yii::$app->get($this->queryCache, false);
+            } else {
+                $cache = $this->queryCache;
+            }
+            if ($cache instanceof CacheInterface) {
+                return [$cache, $duration, $dependency];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -213,12 +383,86 @@ class CoroutineDbConnection extends Connection
             $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, $this->emulatePrepare ?? false);
         }
 
-        // Set default fetch mode if configured
-        if ($this->pdoType !== null) {
-            $pdo->setAttribute(PDO::ATTR_ORACLE_NULLS, $this->pdoType);
-        }
-
         // Trigger after open event on the connection instance
         $this->trigger(self::EVENT_AFTER_OPEN);
+    }
+
+    private function rollbackTransactionOnLevel(Transaction $transaction, int $level): void
+    {
+        if ($transaction->isActive && $transaction->level === $level) {
+            try {
+                $transaction->rollBack();
+            } catch (\Exception $e) {
+                \Yii::error($e, __METHOD__);
+            }
+        }
+    }
+
+    private function popQueryCacheInfo(): void
+    {
+        $stack = $this->getRuntimeValue('queryCacheInfo');
+        array_pop($stack);
+        $this->setRuntimeValue('queryCacheInfo', $stack);
+    }
+
+    private function getRuntimeValue(string $name)
+    {
+        $state = $this->getRuntimeState();
+
+        return $state[$name] ?? null;
+    }
+
+    private function setRuntimeValue(string $name, $value): void
+    {
+        $state = $this->getRuntimeState();
+        $state[$name] = $value;
+        $this->setRuntimeState($state);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function getRuntimeState(): array
+    {
+        if (Coroutine::getCid() < 0) {
+            return $this->runtimeState;
+        }
+
+        $context = Coroutine::getContext();
+        $key = (string) spl_object_id($this);
+        $states = $context[self::CONTEXT_STATE_KEY] ?? [];
+
+        return $states[$key] ?? $this->defaultRuntimeState();
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     */
+    private function setRuntimeState(array $state): void
+    {
+        if (Coroutine::getCid() < 0) {
+            $this->runtimeState = $state;
+
+            return;
+        }
+
+        $context = Coroutine::getContext();
+        $key = (string) spl_object_id($this);
+        $states = $context[self::CONTEXT_STATE_KEY] ?? [];
+        $states[$key] = $state;
+        $context[self::CONTEXT_STATE_KEY] = $states;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function defaultRuntimeState(): array
+    {
+        return [
+            'pdo' => null,
+            'released' => false,
+            'transaction' => null,
+            'queryCacheInfo' => [],
+        ];
     }
 }

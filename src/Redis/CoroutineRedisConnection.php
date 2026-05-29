@@ -31,6 +31,8 @@ class CoroutineRedisConnection extends BaseRedisConnection
 {
     use PoolManager;
 
+    private const CONTEXT_STATE_KEY = '__yiiSwooleRedisConnectionState';
+
     /**
      * Maximum number of connections in the pool.
      */
@@ -53,19 +55,15 @@ class CoroutineRedisConnection extends BaseRedisConnection
     public bool $enableHealthCheck = false;
 
     /**
-     * @var resource|null The current socket resource from the pool
+     * Runtime state used outside Swoole coroutine contexts.
+     *
+     * @var array<string, mixed>
      */
-    private $currentSocket = null;
-
-    /**
-     * @var bool Whether the current socket encountered a failure during use
-     */
-    private bool $currentSocketFailed = false;
-
-    /**
-     * @var bool Whether the current socket has been released back to the pool
-     */
-    private bool $released = false;
+    private array $runtimeState = [
+        'currentSocket' => null,
+        'currentSocketFailed' => false,
+        'released' => false,
+    ];
 
     /**
      * Returns the socket connection resource.
@@ -78,8 +76,9 @@ class CoroutineRedisConnection extends BaseRedisConnection
      */
     public function getSocket()
     {
-        if ($this->currentSocket !== null && !$this->released) {
-            return $this->currentSocket;
+        $socket = $this->getRuntimeValue('currentSocket');
+        if ($socket !== null && !$this->getRuntimeValue('released')) {
+            return $socket;
         }
 
         return false;
@@ -92,7 +91,19 @@ class CoroutineRedisConnection extends BaseRedisConnection
      */
     public function getIsActive(): bool
     {
-        return $this->currentSocket !== null && !$this->released && !$this->currentSocketFailed;
+        return $this->getRuntimeValue('currentSocket') !== null
+            && !$this->getRuntimeValue('released')
+            && !$this->getRuntimeValue('currentSocketFailed');
+    }
+
+    public static function clearCoroutineRuntimeState(): void
+    {
+        if (Coroutine::getCid() < 0) {
+            return;
+        }
+
+        $context = Coroutine::getContext();
+        unset($context[self::CONTEXT_STATE_KEY]);
     }
 
     /**
@@ -114,9 +125,9 @@ class CoroutineRedisConnection extends BaseRedisConnection
 
         // Acquire socket from coroutine pool
         $socket = $this->acquireSocket();
-        $this->currentSocket = $socket;
-        $this->currentSocketFailed = false;
-        $this->released = false;
+        $this->setRuntimeValue('currentSocket', $socket);
+        $this->setRuntimeValue('currentSocketFailed', false);
+        $this->setRuntimeValue('released', false);
 
         // Trigger application-level init hook
         // Note: AUTH/SELECT already done during pool creation
@@ -140,16 +151,16 @@ class CoroutineRedisConnection extends BaseRedisConnection
             return;
         }
 
-        if ($this->released || $this->currentSocket === null) {
+        $socket = $this->getRuntimeValue('currentSocket');
+        if ($this->getRuntimeValue('released') || $socket === null) {
             return;
         }
 
-        $socket = $this->currentSocket;
-        $failed = $this->currentSocketFailed;
+        $failed = $this->getRuntimeValue('currentSocketFailed');
 
-        $this->currentSocket = null;
-        $this->currentSocketFailed = false;
-        $this->released = true;
+        $this->setRuntimeValue('currentSocket', null);
+        $this->setRuntimeValue('currentSocketFailed', false);
+        $this->setRuntimeValue('released', true);
 
         // Return to coroutine pool or discard on failure
         if ($failed) {
@@ -399,8 +410,8 @@ class CoroutineRedisConnection extends BaseRedisConnection
      */
     private function markCurrentSocketAsFailed(): void
     {
-        if ($this->currentSocket !== null) {
-            $this->currentSocketFailed = true;
+        if ($this->getRuntimeValue('currentSocket') !== null) {
+            $this->setRuntimeValue('currentSocketFailed', true);
         }
     }
 
@@ -423,5 +434,65 @@ class CoroutineRedisConnection extends BaseRedisConnection
             $this->markCurrentSocketAsFailed();
             throw $exception;
         }
+    }
+
+    private function getRuntimeValue(string $name)
+    {
+        $state = $this->getRuntimeState();
+
+        return $state[$name] ?? null;
+    }
+
+    private function setRuntimeValue(string $name, $value): void
+    {
+        $state = $this->getRuntimeState();
+        $state[$name] = $value;
+        $this->setRuntimeState($state);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function getRuntimeState(): array
+    {
+        if (Coroutine::getCid() < 0) {
+            return $this->runtimeState;
+        }
+
+        $context = Coroutine::getContext();
+        $key = (string) spl_object_id($this);
+        $states = $context[self::CONTEXT_STATE_KEY] ?? [];
+
+        return $states[$key] ?? $this->defaultRuntimeState();
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     */
+    private function setRuntimeState(array $state): void
+    {
+        if (Coroutine::getCid() < 0) {
+            $this->runtimeState = $state;
+
+            return;
+        }
+
+        $context = Coroutine::getContext();
+        $key = (string) spl_object_id($this);
+        $states = $context[self::CONTEXT_STATE_KEY] ?? [];
+        $states[$key] = $state;
+        $context[self::CONTEXT_STATE_KEY] = $states;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function defaultRuntimeState(): array
+    {
+        return [
+            'currentSocket' => null,
+            'currentSocketFailed' => false,
+            'released' => false,
+        ];
     }
 }

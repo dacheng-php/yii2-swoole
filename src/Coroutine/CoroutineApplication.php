@@ -17,7 +17,7 @@ use yii\web\Application;
  * CoroutineApplication provides component isolation for Swoole coroutine environments.
  *
  * Each coroutine gets its own isolated component instances, preventing state leakage
- * between concurrent requests. Shared components (like cache, log) remain singletons
+ * between concurrent requests. Shared components (like log) remain singletons
  * across all coroutines.
  *
  * Configuration example:
@@ -28,7 +28,7 @@ use yii\web\Application;
  *         // ...
  *     ],
  * ],
- * 'sharedComponentIds' => ['cache', 'log'],  // Optional: override default shared IDs
+ * 'sharedComponentIds' => ['log'],           // Optional: override default shared IDs
  * 'connectionComponentClasses' => [...],      // Optional: custom connection classes
  * ```
  *
@@ -44,7 +44,6 @@ class CoroutineApplication extends Application
      * These components are not isolated per-coroutine and behave as singletons.
      */
     public array $sharedComponentIds = [
-        'cache',
         'formatter',
         'i18n',
         'log',
@@ -182,7 +181,6 @@ class CoroutineApplication extends Application
         $this->requestedRoute = null;
         $this->requestedAction = null;
         $this->requestedParams = null;
-        $this->requestedModule = null;
         $this->state = self::STATE_BEGIN;
 
         // Clear coroutine context
