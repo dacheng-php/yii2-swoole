@@ -4,116 +4,57 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Log;
 
+use Swoole\Coroutine;
+use Swoole\Coroutine\System;
 use Swoole\Timer;
 use yii\base\InvalidConfigException;
 
 /**
- * LogWorker handles asynchronous file writing using a direct buffer approach.
+ * Asynchronous batch log file writer backed by a bounded memory buffer and a Swoole timer.
  *
- * Messages are pushed directly to an internal buffer, and a timer periodically
- * flushes the buffer to disk. This design avoids Channel operations and deadlock risks.
- *
- * Features:
- * - Hard buffer limit with overflow protection
- * - Automatic warning when buffer is full
- * - Graceful degradation under heavy load
- * - Configurable overflow callback for custom monitoring
- *
- * Configuration example:
- * ```php
- * 'log' => [
- *     'targets' => [
- *         [
- *             'class' => CoroutineFileTarget::class,
- *             'logWorkerConfig' => [
- *                 'batchInterval' => 200,        // ms, default: 100
- *                 'maxBufferSize' => 50000,      // default: 100000
- *                 'bufferWarningThreshold' => 45000, // default: 90000
- *                 'maxBufferWarnings' => 5,      // default: 10
- *                 'onBufferOverflow' => function(int $dropped, int $current, int $max): void {
- *                     Yii::warning("Log buffer overflow: {$dropped} messages dropped", 'log-worker');
- *                 },
- *             ],
- *         ],
- *     ],
- * ],
- * ```
+ * Guards disk flush & rotation with a re-entrancy lock so overlapping timer ticks cannot
+ * corrupt file rotation.
  */
 class LogWorker
 {
-    /**
-     * Timer interval for batch writing (milliseconds)
-     * @var int
-     */
     public int $batchInterval = 100;
 
-    /**
-     * Hard buffer limit - maximum messages to buffer
-     * When reached, oldest messages are dropped to prevent memory exhaustion
-     * @var int
-     */
     public int $maxBufferSize = 100000;
 
-    /**
-     * Warning threshold - when buffer exceeds this size, log a warning
-     * @var int
-     */
     public int $bufferWarningThreshold = 90000;
 
-    /**
-     * Maximum number of buffer-full warnings to log (prevents log spam)
-     * @var int
-     */
     public int $maxBufferWarnings = 10;
 
     /**
-     * @var callable|null Callback invoked when buffer overflow occurs.
-     *                    Signature: function(int $droppedCount, int $currentSize, int $maxSize): void
-     *                    If null, falls back to error_log().
+     * @var callable|null Signature: function(int $droppedCount, int $currentSize, int $maxSize): void
      */
     public $onBufferOverflow = null;
 
-    private string $logFile;
-    private bool $enableRotation;
-    private int $maxFileSize;
-    private int $maxLogFiles;
-    private ?int $fileMode;
-    private int $dirMode;
     private bool $running = false;
+
+    private bool $flushing = false;
+
     private ?int $writeTimer = null;
+
+    /** @var string[] */
     private array $messageBuffer = [];
-    private int $droppedMessages = 0;
+
     private int $bufferWarningCount = 0;
+
     private int $totalDropped = 0;
 
     /**
-     * Creates a new LogWorker instance.
-     *
-     * @param string $logFile Path to the log file
-     * @param bool $enableRotation Whether to enable log rotation
-     * @param int $maxFileSize Maximum file size in KB before rotation
-     * @param int $maxLogFiles Maximum number of rotated log files to keep
-     * @param int|null $fileMode Octal file mode for log files, or null to use system default
-     * @param int $dirMode Octal directory mode for log directory creation
-     * @param array $config Optional configuration for buffer settings
+     * @param array<string, mixed> $config
      */
     public function __construct(
-        string $logFile,
-        bool $enableRotation,
-        int $maxFileSize,
-        int $maxLogFiles,
-        ?int $fileMode,
-        int $dirMode,
+        private readonly string $logFile,
+        private readonly bool $enableRotation,
+        private readonly int $maxFileSize,
+        private readonly int $maxLogFiles,
+        private readonly ?int $fileMode,
+        private readonly int $dirMode,
         array $config = []
     ) {
-        $this->logFile = $logFile;
-        $this->enableRotation = $enableRotation;
-        $this->maxFileSize = $maxFileSize;
-        $this->maxLogFiles = $maxLogFiles;
-        $this->fileMode = $fileMode;
-        $this->dirMode = $dirMode;
-
-        // Apply configuration
         if (isset($config['batchInterval'])) {
             $this->batchInterval = (int) $config['batchInterval'];
         }
@@ -133,37 +74,6 @@ class LogWorker
         $this->validateConfig();
     }
 
-    private function validateConfig(): void
-    {
-        if ($this->batchInterval < 1) {
-            throw new InvalidConfigException('"batchInterval" must be greater than or equal to 1 millisecond.');
-        }
-
-        if ($this->maxBufferSize < 1) {
-            throw new InvalidConfigException('"maxBufferSize" must be greater than or equal to 1.');
-        }
-
-        if ($this->bufferWarningThreshold < 0) {
-            throw new InvalidConfigException('"bufferWarningThreshold" must be greater than or equal to 0.');
-        }
-
-        if ($this->bufferWarningThreshold > $this->maxBufferSize) {
-            throw new InvalidConfigException('"bufferWarningThreshold" must be less than or equal to "maxBufferSize".');
-        }
-
-        if ($this->maxBufferWarnings < 0) {
-            throw new InvalidConfigException('"maxBufferWarnings" must be greater than or equal to 0.');
-        }
-    }
-
-    /**
-     * Starts the log worker.
-     *
-     * Creates the log directory if needed and starts a timer that periodically
-     * flushes buffered messages to disk. If already started, this method does nothing.
-     *
-     * @return void
-     */
     public function start(): void
     {
         if ($this->running) {
@@ -177,24 +87,16 @@ class LogWorker
             @mkdir($logPath, $this->dirMode, true);
         }
 
-        $this->writeTimer = Timer::tick($this->batchInterval, function () {
-            if (!$this->running) {
+        $this->writeTimer = Timer::tick($this->batchInterval, function (): void {
+            if (!$this->running || $this->flushing || $this->messageBuffer === []) {
                 return;
             }
-            \Swoole\Coroutine::create(function (): void {
+            Coroutine::create(function (): void {
                 $this->writeBufferedMessages();
             });
         });
     }
 
-    /**
-     * Stops the log worker.
-     *
-     * Flushes any remaining buffered messages to disk and stops the timer.
-     * Logs warnings if messages remain in buffer or were dropped.
-     *
-     * @return void
-     */
     public function stop(): void
     {
         if (!$this->running) {
@@ -208,32 +110,19 @@ class LogWorker
             $this->writeTimer = null;
         }
 
+        // Wait briefly if an async flush coroutine is currently writing to disk
+        if ($this->flushing && Coroutine::getCid() >= 0) {
+            $deadline = microtime(true) + 2.0;
+            while ($this->flushing && microtime(true) < $deadline) {
+                Coroutine::sleep(0.005);
+            }
+        }
+
         $this->writeBufferedMessages();
-
-        if (!empty($this->messageBuffer)) {
-            // Use error_log here to avoid recursion in logging system
-            error_log('[LogWorker] Warning: ' . count($this->messageBuffer) . ' messages remain after stop');
-        }
-
-        if ($this->totalDropped > 0) {
-            // Use error_log here to avoid recursion in logging system
-            error_log('[LogWorker] Warning: ' . $this->totalDropped . ' messages were dropped (buffer full)');
-        }
     }
 
     /**
-     * Pushes log messages to the internal buffer.
-     *
-     * Messages will be written to disk during the next flush cycle.
-     * Partially accepts messages when buffer is nearly full to minimize drops.
-     *
-     * When buffer reaches MAX_BUFFER_SIZE:
-     * - Oldest messages are dropped (FIFO eviction)
-     * - Warning is logged (up to MAX_BUFFER_WARNINGS times)
-     * - New messages replace old ones to prevent memory exhaustion
-     *
-     * @param array<string> $messages Array of log message strings to buffer
-     * @return int Number of messages actually buffered
+     * @param string[] $messages
      */
     public function pushMessages(array $messages): int
     {
@@ -241,14 +130,18 @@ class LogWorker
             return 0;
         }
 
+        $incomingCount = count($messages);
         $currentSize = count($this->messageBuffer);
 
-        // Check if we need to evict old messages
-        if ($currentSize + count($messages) > $this->maxBufferSize) {
-            $this->evictOldMessages(count($messages));
+        if ($currentSize + $incomingCount > $this->maxBufferSize) {
+            $toRemove = min($currentSize, ($currentSize + $incomingCount) - $this->maxBufferSize);
+            if ($toRemove > 0) {
+                $this->messageBuffer = array_slice($this->messageBuffer, $toRemove);
+                $this->totalDropped += $toRemove;
+                $currentSize = count($this->messageBuffer);
+            }
         }
 
-        // Log buffer warning if approaching limit
         if ($currentSize > $this->bufferWarningThreshold && $this->bufferWarningCount < $this->maxBufferWarnings) {
             $this->bufferWarningCount++;
             $this->logBufferWarning($currentSize);
@@ -257,7 +150,6 @@ class LogWorker
         $accepted = 0;
         foreach ($messages as $message) {
             if (count($this->messageBuffer) >= $this->maxBufferSize) {
-                $this->droppedMessages++;
                 $this->totalDropped++;
                 break;
             }
@@ -269,23 +161,34 @@ class LogWorker
     }
 
     /**
-     * Evicts old messages from buffer to make room for new ones.
-     *
-     * @param int $needed Number of slots needed
+     * @return array{buffered:int,dropped:int,max_buffer_size:int,running:bool}
      */
-    private function evictOldMessages(int $needed): void
+    public function getStats(): array
     {
-        $toRemove = min(count($this->messageBuffer), $needed);
-        $this->messageBuffer = array_slice($this->messageBuffer, $toRemove);
-        $this->totalDropped += $toRemove;
+        return [
+            'buffered' => count($this->messageBuffer),
+            'dropped' => $this->totalDropped,
+            'max_buffer_size' => $this->maxBufferSize,
+            'running' => $this->running,
+        ];
     }
 
-    /**
-     * Logs a buffer capacity warning.
-     * Invokes callback if configured, otherwise falls back to error_log.
-     *
-     * @param int $currentSize Current buffer size
-     */
+    private function validateConfig(): void
+    {
+        if ($this->batchInterval < 1) {
+            throw new InvalidConfigException('"batchInterval" must be >= 1 ms.');
+        }
+        if ($this->maxBufferSize < 1) {
+            throw new InvalidConfigException('"maxBufferSize" must be >= 1.');
+        }
+        if ($this->bufferWarningThreshold < 0 || $this->bufferWarningThreshold > $this->maxBufferSize) {
+            throw new InvalidConfigException('"bufferWarningThreshold" must be between 0 and "maxBufferSize".');
+        }
+        if ($this->maxBufferWarnings < 0) {
+            throw new InvalidConfigException('"maxBufferWarnings" must be >= 0.');
+        }
+    }
+
     private function logBufferWarning(int $currentSize): void
     {
         if ($this->onBufferOverflow !== null) {
@@ -293,51 +196,50 @@ class LogWorker
             return;
         }
 
-        // Fallback to error_log when no callback is configured
-        $warning = sprintf(
-            '[LogWorker] Warning: Buffer at %d/%d messages (%.1f%% full). %d total messages dropped.',
+        error_log(sprintf(
+            '[LogWorker] Buffer at %d/%d (%.1f%%). %d total messages dropped.',
             $currentSize,
             $this->maxBufferSize,
             ($currentSize / $this->maxBufferSize) * 100,
             $this->totalDropped
-        );
-        error_log($warning);
+        ));
     }
 
     private function writeBufferedMessages(): void
     {
-        if (empty($this->messageBuffer)) {
+        if ($this->flushing || $this->messageBuffer === []) {
             return;
         }
 
-        $messages = $this->messageBuffer;
-        $this->messageBuffer = [];
-
-        $this->writeMessages($messages);
+        $this->flushing = true;
+        try {
+            while ($this->messageBuffer !== []) {
+                $batch = $this->messageBuffer;
+                $this->messageBuffer = [];
+                $this->writeMessages($batch);
+            }
+        } finally {
+            $this->flushing = false;
+        }
     }
 
+    /**
+     * @param string[] $messages
+     */
     private function writeMessages(array $messages): void
     {
-        if (empty($messages)) {
-            return;
-        }
-
         $text = implode("\n", $messages) . "\n";
-
         if (trim($text) === '') {
             return;
         }
 
-        $inCoroutine = \Swoole\Coroutine::getCid() >= 0;
-
-        if ($inCoroutine) {
-            $success = \Swoole\Coroutine\System::writeFile($this->logFile, $text, FILE_APPEND);
+        if (Coroutine::getCid() >= 0) {
+            $success = System::writeFile($this->logFile, $text, FILE_APPEND) !== false;
         } else {
             $success = @file_put_contents($this->logFile, $text, FILE_APPEND | LOCK_EX) !== false;
         }
 
         if (!$success) {
-            // Use error_log here to avoid recursion in logging system
             error_log("LogWorker: Unable to write to log file: {$this->logFile}");
             return;
         }
@@ -348,15 +250,11 @@ class LogWorker
 
         if ($this->enableRotation) {
             clearstatcache(true, $this->logFile);
+            $maxBytes = $this->maxFileSize * 1024;
             $fileSize = @filesize($this->logFile);
-            if ($fileSize !== false && $fileSize > $this->maxFileSize * 1024) {
-                $this->rotateFiles();
+            if ($fileSize !== false && $fileSize > $maxBytes) {
+                LogFileRotator::rotate($this->logFile, $this->maxLogFiles, $this->fileMode, $maxBytes);
             }
         }
-    }
-
-    private function rotateFiles(): void
-    {
-        LogFileRotator::rotate($this->logFile, $this->maxLogFiles, $this->fileMode);
     }
 }

@@ -117,7 +117,7 @@ class SiteController extends Controller
         $hasDb = false;
 
         // Check if this coroutine has a DB instance
-        if (Yii::$app instanceof \Dacheng\Yii2\Swoole\Coroutine\CoroutineApplication) {
+        if (Yii::$app instanceof \Dacheng\Yii2\Swoole\Web\Application) {
             $hasDb = Yii::$app->has('db', true);  // Check if instance exists
         }
 

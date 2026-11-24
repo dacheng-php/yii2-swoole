@@ -1,5 +1,6 @@
 <?php
 
+use Dacheng\Yii2\Swoole\{Console, Log, Server};
 use yii\helpers\BaseArrayHelper;
 
 $commonConfig = require __DIR__ . '/common.php';
@@ -9,43 +10,39 @@ $config = [
     'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
     'controllerNamespace' => 'app\commands',
+    'controllerMap' => [
+        'swoole' => [
+            'class' => Console\SwooleController::class,
+            'serverComponent' => 'swooleHttpServer',
+        ],
+    ],
     'aliases' => [
         '@bower' => '@vendor/bower-asset',
         '@npm'   => '@vendor/npm-asset',
         '@tests' => '@app/tests',
     ],
-    'controllerMap' => [
-        'swoole' => [
-            'class' => \Dacheng\Yii2\Swoole\Console\SwooleController::class,
-            'serverComponent' => 'swooleHttpServer',
-        ],
-        /*
-        'fixture' => [ // Fixture generation command line.
-            'class' => 'yii\faker\FixtureController',
-        ],
-        */
-    ],
     'components' => [
+        'swooleHttpServer' => [
+            'class' => Server\HttpServer::class,
+            'host' => getenv('SWOOLE_HOST') ?: '127.0.0.1',
+            'port' => (int) (getenv('SWOOLE_PORT') ?: 9501),
+            'workers' => (int) (getenv('SWOOLE_WORKERS') ?: 0),
+            'webConfig' => __DIR__ . '/web.php',
+            'documentRoot' => dirname(__DIR__) . '/web',
+            'serverHeader' => 'yii2-swoole',
+            'maxCoroutine' => 100000,
+        ],
         'log' => [
             'traceLevel' => YII_DEBUG ? 3 : 0,
-            'flushInterval' => 1,
+            'flushInterval' => 100,
             'targets' => [
                 [
-                    'class' => \Dacheng\Yii2\Swoole\Log\CoroutineFileTarget::class,
+                    'class' => Log\FileTarget::class,
                     'levels' => YII_DEBUG ? ['error', 'warning', 'info'] : ['error', 'warning'],
-                    'exportInterval' => 1,
+                    'exportInterval' => 100,
                     'logFile' => '@runtime/logs/console.log',
-                    'maxFileSize' => 10240, // 10MB
+                    'maxFileSize' => 10240,
                     'maxLogFiles' => 5,
-                    'enableRotation' => true,
-                    'logWorkerConfig' => [
-                        'batchInterval' => (int)(getenv('YII_LOG_BATCH_INTERVAL') ?: 100),
-                        'maxBufferSize' => (int)(getenv('YII_LOG_MAX_BUFFER_SIZE') ?: 100000),
-                        'bufferWarningThreshold' => (int)(getenv('YII_LOG_BUFFER_WARNING_THRESHOLD') ?: 90000),
-                        'maxBufferWarnings' => (int)(getenv('YII_LOG_MAX_BUFFER_WARNINGS') ?: 10),
-                    ],
-                    'categories' => [],
-                    'except' => [],
                     'logVars' => [],
                     'microtime' => true,
                 ],

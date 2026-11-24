@@ -8,8 +8,10 @@
 require __DIR__ . '/vendor/autoload.php';
 require __DIR__ . '/vendor/yiisoft/yii2/Yii.php';
 
+Yii::$classMap['yii\helpers\ArrayHelper'] = __DIR__ . '/helpers/ArrayHelper.php';
+
 $config = require __DIR__ . '/config/console.php';
 
-$application = new \Dacheng\Yii2\Swoole\Console\SwooleConsoleApplication($config);
+$application = new yii\console\Application($config);
 $exitCode = $application->run();
 exit($exitCode);

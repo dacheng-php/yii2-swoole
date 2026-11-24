@@ -5,7 +5,7 @@ namespace app\controllers;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
-use Dacheng\Yii2\Swoole\Redis\CoroutineRedisConnection;
+use Dacheng\Yii2\Swoole\Redis\Connection as RedisConnection;
 use Swoole\Coroutine;
 
 class RedisController extends Controller
@@ -72,7 +72,7 @@ class RedisController extends Controller
         $redis = $this->getRedis();
 
         $stats = null;
-        if ($redis instanceof CoroutineRedisConnection) {
+        if ($redis instanceof RedisConnection) {
             $stats = $redis->getPoolStats();
         }
 
@@ -80,7 +80,7 @@ class RedisController extends Controller
             'success' => true,
             'action' => 'stats',
             'pool_stats' => $stats,
-            'is_coroutine' => $redis instanceof CoroutineRedisConnection,
+            'is_coroutine' => $redis instanceof RedisConnection,
             'coroutine_id' => Coroutine::getCid(),
         ];
     }
@@ -175,11 +175,11 @@ class RedisController extends Controller
         ];
     }
 
-    private function getRedis(): CoroutineRedisConnection
+    private function getRedis(): RedisConnection
     {
         $redis = Yii::$app->redis;
-        if (!$redis instanceof CoroutineRedisConnection) {
-            throw new \RuntimeException('Redis component must be configured to use CoroutineRedisConnection.');
+        if (!$redis instanceof RedisConnection) {
+            throw new \RuntimeException('Redis component must be configured to use Redis\\Connection.');
         }
 
         return $redis;

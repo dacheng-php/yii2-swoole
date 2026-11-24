@@ -187,5 +187,13 @@ class HealthController extends Controller
             'checks' => $checks,
         ]);
     }
+
+    /**
+     * Runtime telemetry endpoint backed by RuntimeStats::snapshot().
+     */
+    public function actionStats()
+    {
+        return $this->asJson(\Dacheng\Yii2\Swoole\Server\RuntimeStats::snapshot());
+    }
 }
 

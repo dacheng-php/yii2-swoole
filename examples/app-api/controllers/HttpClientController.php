@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
-use Dacheng\Yii2\Swoole\HttpClient\CoroutineClient;
+use Dacheng\Yii2\Swoole\HttpClient\Client;
+use Dacheng\Yii2\Swoole\HttpClient\Transport;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
@@ -15,13 +16,13 @@ class HttpClientController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $client = new CoroutineClient([
+        $client = new Client([
             'baseUrl' => 'http://httpbun.com',
             'requestConfig' => [
-                'format' => CoroutineClient::FORMAT_JSON,
+                'format' => Client::FORMAT_JSON,
             ],
             'responseConfig' => [
-                'format' => CoroutineClient::FORMAT_JSON,
+                'format' => Client::FORMAT_JSON,
             ],
         ]);
 
@@ -38,12 +39,12 @@ class HttpClientController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $client = new CoroutineClient([
+        $client = new Client([
             'baseUrl' => 'http://httpbun.com',
         ]);
 
         $response = $client->post('post', ['key' => 'value'])
-            ->setFormat(CoroutineClient::FORMAT_JSON)
+            ->setFormat(Client::FORMAT_JSON)
             ->send();
 
         return [
@@ -57,7 +58,7 @@ class HttpClientController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $client = new CoroutineClient([
+        $client = new Client([
             'baseUrl' => 'http://httpbun.com',
         ]);
 
@@ -90,7 +91,7 @@ class HttpClientController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $client = new CoroutineClient([
+        $client = new Client([
             'baseUrl' => 'http://httpbun.com',
         ]);
 
@@ -112,10 +113,10 @@ class HttpClientController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $client = new CoroutineClient([
+        $client = new Client([
             'baseUrl' => 'http://httpbun.com',
             'transport' => [
-                'class' => 'Dacheng\Yii2\Swoole\HttpClient\CoroutineTransport',
+                'class' => Transport::class,
                 'requestTimeout' => 2,
             ],
         ]);
@@ -140,7 +141,7 @@ class HttpClientController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $client = new CoroutineClient([
+        $client = new Client([
             'baseUrl' => 'https://httpbun.com',
             'requestConfig' => [
                 'options' => [

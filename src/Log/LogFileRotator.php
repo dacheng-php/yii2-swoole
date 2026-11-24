@@ -5,69 +5,73 @@ declare(strict_types=1);
 namespace Dacheng\Yii2\Swoole\Log;
 
 /**
- * LogFileRotator provides shared log file rotation logic.
+ * Shared, multi-worker-safe log file rotation using an advisory lock file.
  *
- * This class eliminates code duplication between LogWorker and CoroutineFileTarget
- * by providing a single implementation of log file rotation.
+ * Uses a non-blocking LOCK_EX on a dedicated sibling lock file so concurrent
+ * Swoole workers never stomp on each other's rename() sequence, and re-checks
+ * the file size after acquiring the lock to avoid duplicate rotations.
  */
 final class LogFileRotator
 {
-    /**
-     * Rotates log files by renaming existing files with incrementing suffixes.
-     *
-     * For example, with maxLogFiles = 3:
-     * - app.log.3 is deleted
-     * - app.log.2 becomes app.log.3 (renamed)
-     * - app.log.1 becomes app.log.2 (renamed)
-     * - app.log becomes app.log.1 (renamed) and a new empty app.log is created
-     *
-     * Uses rename() for rotated files to avoid duplicating disk usage.
-     *
-     * @param string $logFile The primary log file path
-     * @param int $maxLogFiles Maximum number of rotated files to keep
-     * @param int|null $fileMode Optional file mode to set on new files
-     */
-    public static function rotate(string $logFile, int $maxLogFiles, ?int $fileMode = null): void
-    {
-        for ($i = $maxLogFiles; $i >= 0; --$i) {
-            $rotateFile = $logFile . ($i === 0 ? '' : '.' . $i);
+    public static function rotate(
+        string $logFile,
+        int $maxLogFiles,
+        ?int $fileMode = null,
+        int $maxFileSizeBytes = 0
+    ): void {
+        $lockFile = $logFile . '.rotate.lock';
+        $lockFp = @fopen($lockFile, 'c');
+        if ($lockFp === false) {
+            return;
+        }
 
-            if (!is_file($rotateFile)) {
-                continue;
+        if (!@flock($lockFp, LOCK_EX | LOCK_NB)) {
+            @fclose($lockFp);
+            return;
+        }
+
+        try {
+            if ($maxFileSizeBytes > 0) {
+                clearstatcache(true, $logFile);
+                $currentSize = @filesize($logFile);
+                if ($currentSize === false || $currentSize <= $maxFileSizeBytes) {
+                    return;
+                }
             }
 
-            if ($i === $maxLogFiles) {
-                @unlink($rotateFile);
-                continue;
-            }
+            for ($i = $maxLogFiles; $i >= 0; --$i) {
+                $rotateFile = $logFile . ($i === 0 ? '' : '.' . $i);
 
-            $newFile = $logFile . '.' . ($i + 1);
+                if (!is_file($rotateFile)) {
+                    continue;
+                }
 
-            // Use rename() for efficiency (avoids doubling disk usage)
-            if ($i === 0) {
-                // For the current log file: rename to .1, then create new empty file
-                if (@rename($rotateFile, $newFile)) {
-                    if ($fileMode !== null) {
+                if ($i === $maxLogFiles) {
+                    @unlink($rotateFile);
+                    continue;
+                }
+
+                $newFile = $logFile . '.' . ($i + 1);
+
+                if ($i === 0) {
+                    if (@rename($rotateFile, $newFile)) {
+                        if ($fileMode !== null) {
+                            @chmod($newFile, $fileMode);
+                        }
+                        self::createEmptyFile($rotateFile, $fileMode);
+                    }
+                } else {
+                    if (@rename($rotateFile, $newFile) && $fileMode !== null) {
                         @chmod($newFile, $fileMode);
                     }
-                    // Create new empty log file
-                    self::createEmptyFile($rotateFile, $fileMode);
-                }
-            } else {
-                // For rotated files: just rename
-                if (@rename($rotateFile, $newFile) && $fileMode !== null) {
-                    @chmod($newFile, $fileMode);
                 }
             }
+        } finally {
+            @flock($lockFp, LOCK_UN);
+            @fclose($lockFp);
         }
     }
 
-    /**
-     * Creates an empty file with optional mode.
-     *
-     * @param string $file The file path to create
-     * @param int|null $fileMode Optional file mode to set
-     */
     private static function createEmptyFile(string $file, ?int $fileMode = null): void
     {
         $fp = @fopen($file, 'a');

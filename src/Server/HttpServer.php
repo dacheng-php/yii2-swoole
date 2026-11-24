@@ -4,361 +4,445 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Server;
 
-use Dacheng\Yii2\Swoole\Runtime\RequestScope;
-use Swoole\Atomic;
-use Swoole\Coroutine;
-use Swoole\Coroutine\Http\Server as SwooleCoroutineHttpServer;
-use Swoole\Http\Request;
-use Swoole\Http\Response;
+use Dacheng\Yii2\Swoole\Pool\PoolRegistry;
+use Swoole\Http\Request as SwooleRequest;
+use Swoole\Http\Response as SwooleResponse;
+use Swoole\Http\Server as SwooleHttpServer;
+use Swoole\Timer;
+use Throwable;
+use Yii;
 use yii\base\Component;
 use yii\base\InvalidConfigException;
-use yii\di\Instance;
 
+/**
+ * Production-grade Swoole HTTP Server component for Yii2.
+ *
+ * Uses Swoole\Http\Server in SWOOLE_BASE mode by default:
+ * - Maximum throughput: zero Master->Worker IPC overhead, kernel SO_REUSEPORT load-balancing.
+ * - Multi-core elastic scaling: set workers=1 for single-worker containers or workers=N/auto for multi-core.
+ * - Native C-level static file handler, HTTP compression, reload_async, memory high-watermark guard, and PID management.
+ * - Strict fork-safety: Yii2 Application and all connection pools are bootstrapped exclusively inside onWorkerStart.
+ */
 class HttpServer extends Component
 {
     public const EVENT_BEFORE_START = 'beforeStart';
-
-    public const EVENT_AFTER_START = 'afterStart';
-
-    public const EVENT_BEFORE_STOP = 'beforeStop';
-
-    public const EVENT_AFTER_STOP = 'afterStop';
-
-    /**
-     * @var StaticFileServer|null Static file server instance
-     */
-    private ?StaticFileServer $staticFileServer = null;
-
-    /**
-     * @var bool Whether to enable request tracking for debugging
-     */
-    public bool $enableRequestTracking = false;
-
-    /**
-     * @var bool Whether to enable Swoole's native C-level static file handler.
-     * When enabled, requests for static files are handled directly by Swoole's C driver,
-     * bypassing the PHP layer completely. Falls back to StaticFileServer if not handled.
-     */
-    public bool $enableNativeStaticHandler = true;
+    public const EVENT_WORKER_START = 'workerStart';
+    public const EVENT_WORKER_STOP = 'workerStop';
 
     public string $host = '127.0.0.1';
 
     public int $port = 9501;
 
-    public array $settings = [];
-
     /**
-     * @var RequestDispatcherInterface|array|string
+     * Swoole server mode: SWOOLE_BASE (default, lowest latency & IPC-free) or SWOOLE_PROCESS.
      */
-    public $dispatcher;
+    public int $mode = SWOOLE_BASE;
 
     /**
-     * @var callable|null
+     * Number of worker processes (0 = auto based on CPU cores).
      */
-    public $serverFactory;
+    public int $workers = 0;
 
     /**
-     * @var string|null Document root for static files
+     * Path to Yii2 web application config file (or config array).
+     *
+     * @var string|array<string, mixed>|null
+     */
+    public string|array|null $webConfig = null;
+
+    /**
+     * Optional document root for Swoole's native C-level static file handler.
      */
     public ?string $documentRoot = null;
 
     /**
-     * @var array Static file extensions and their MIME types
+     * PID file path used by CLI stop/reload/status commands (defaults to @runtime/swoole-http.pid).
+     */
+    public ?string $pidFile = null;
+
+    /**
+     * Swoole engine log file path (defaults to @runtime/logs/swoole.log; set '' to log to stdout).
+     */
+    public ?string $logFile = null;
+
+    /**
+     * Swoole log rotation policy (e.g. SWOOLE_LOG_ROTATION_DAILY, or null to disable).
+     */
+    public ?int $logRotation = SWOOLE_LOG_ROTATION_DAILY;
+
+    /**
+     * PHP/terminal error log file path (defaults to @runtime/logs/error.log; set '' to leave PHP default).
+     */
+    public ?string $errorLogFile = null;
+
+    public ?string $serverHeader = 'yii2-swoole';
+
+    public bool $sendRequestIdHeader = false;
+
+    public bool $enableCompression = true;
+
+    public bool $daemonize = false;
+
+    /**
+     * Max requests per worker before automatic graceful restart (0 = disabled, recommended for
+     * leak-free apps so high-QPS traffic does not trigger unnecessary worker restarts).
+     */
+    public int $maxRequest = 0;
+
+    /**
+     * Worker memory high-watermark in MB for graceful self-recycling (0 = disabled).
+     * Checked on the worker maintenance timer (zero per-request overhead).
+     * Requires a Manager process (SWOOLE_PROCESS or SWOOLE_BASE with workers > 1) to respawn.
+     */
+    public int $maxMemoryMb = 256;
+
+    /**
+     * Max seconds to wait for in-flight requests during graceful reload/shutdown.
+     */
+    public int $maxWaitTime = 30;
+
+    public int $maxCoroutine = 100000;
+
+    public int $hookFlags = SWOOLE_HOOK_ALL;
+
+    /**
+     * Interval in seconds to reap expired idle connections inside each worker (0 = disabled).
+     */
+    public float $poolReapInterval = 30.0;
+
+    /**
+     * Development mode: watch PHP source files and trigger graceful reload on changes.
+     */
+    public bool $watch = false;
+
+    /**
+     * Directories to monitor when $watch is enabled (defaults to @app).
      *
-     * Leave empty to use StaticFileServer defaults (common web file types).
-     * @see StaticFileServer::DEFAULT_MIME_TYPES
+     * @var string[]
      */
-    public array $staticFileExtensions = [];
+    public array $watchDirs = [];
 
     /**
-     * @var string|null Custom server header value (default: null to use Swoole's default)
+     * Additional native Swoole\Http\Server settings (merged last so user overrides win).
+     *
+     * @var array<string, mixed>
      */
-    public ?string $serverHeader = null;
+    public array $settings = [];
 
-    private ?SwooleCoroutineHttpServer $server = null;
-
-    private bool $isRunning = false;
-
-    private ?SignalHandler $signalHandler = null;
-
-    /**
-     * @var Atomic Coroutine-safe active request counter
-     */
-    private ?Atomic $activeRequests = null;
+    private ?SwooleHttpServer $server = null;
 
     public function init(): void
     {
         parent::init();
 
-        if (!isset($this->dispatcher)) {
-            throw new InvalidConfigException('Property "dispatcher" must be set.');
+        if ($this->webConfig === null) {
+            throw new InvalidConfigException('Property "webConfig" must be configured with a Yii2 web config file path or array.');
         }
 
-        $this->dispatcher = Instance::ensure($this->dispatcher, RequestDispatcherInterface::class);
-
-        if ($this->serverFactory === null) {
-            $this->serverFactory = static function (string $host, int $port): SwooleCoroutineHttpServer {
-                return new SwooleCoroutineHttpServer($host, $port, false, true);
-            };
+        if (is_string($this->webConfig)) {
+            $this->webConfig = Yii::getAlias($this->webConfig);
         }
 
-        if (!is_callable($this->serverFactory)) {
-            throw new InvalidConfigException('Property "serverFactory" must be a valid callable.');
-        }
-
-        // Initialize static file server if document root is configured
         if ($this->documentRoot !== null) {
-            $this->staticFileServer = new StaticFileServer(
-                $this->documentRoot,
-                empty($this->staticFileExtensions) ? StaticFileServer::DEFAULT_MIME_TYPES : $this->staticFileExtensions
-            );
+            $this->documentRoot = Yii::getAlias($this->documentRoot);
+        }
+
+        $runtimePath = Yii::$app ? Yii::$app->getRuntimePath() : sys_get_temp_dir();
+        $runtimePath = rtrim($runtimePath, DIRECTORY_SEPARATOR);
+
+        if ($this->pidFile === null) {
+            $this->pidFile = $runtimePath . DIRECTORY_SEPARATOR . 'swoole-http.pid';
+        } else {
+            $this->pidFile = Yii::getAlias($this->pidFile);
+        }
+
+        if ($this->logFile === null) {
+            $this->logFile = $runtimePath . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'swoole.log';
+        } elseif ($this->logFile !== '') {
+            $this->logFile = Yii::getAlias($this->logFile);
+        }
+
+        if ($this->errorLogFile === null) {
+            $this->errorLogFile = $runtimePath . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'error.log';
+        } elseif ($this->errorLogFile !== '') {
+            $this->errorLogFile = Yii::getAlias($this->errorLogFile);
         }
     }
 
-    /**
-     * Starts swoole coroutine http server.
-     *
-     * This triggers events: beforeStart, afterStart, afterStop.
-     * This runs in a single process using coroutines for concurrency.
-     * This delegates swoole request to yii2 request through Dispatcher.
-     */
+    public function getProcessManager(): ProcessManager
+    {
+        return new ProcessManager((string) $this->pidFile);
+    }
+
+    public function resolveWorkerCount(): int
+    {
+        if ($this->workers > 0) {
+            return $this->workers;
+        }
+
+        $cpus = function_exists('swoole_cpu_num') ? swoole_cpu_num() : 1;
+
+        return max(1, $cpus);
+    }
+
     public function start(): void
     {
-        if ($this->isRunning) {
-            return;
+        if (!extension_loaded('swoole')) {
+            throw new InvalidConfigException('The swoole PHP extension (>= 6.0) is required.');
         }
+
+        $this->ensureDirectoryForFile((string) $this->pidFile);
+        if ($this->logFile !== null && $this->logFile !== '') {
+            $this->ensureDirectoryForFile($this->logFile);
+        }
+        $this->configureErrorLog();
+
+        $pm = $this->getProcessManager();
+        if ($pm->isRunning()) {
+            throw new \RuntimeException(sprintf(
+                'Swoole HTTP server is already running (PID %d, pidFile=%s).',
+                (int) $pm->readPid(),
+                $this->pidFile
+            ));
+        }
+        $pm->cleanupStalePidFile();
 
         $this->trigger(self::EVENT_BEFORE_START);
 
-        // Set coroutine configuration
-        Coroutine::set([
-            'hook_flags' => SWOOLE_HOOK_ALL,
-            'max_coroutine' => $this->settings['max_coroutine'] ?? 100000,
-            'log_level' => $this->settings['log_level'] ?? SWOOLE_LOG_WARNING,
-        ]);
+        $workerNum = $this->resolveWorkerCount();
+        $effectiveMode = $this->mode;
 
-        $dispatcher = $this->dispatcher;
-        $host = $this->host;
-        $port = $this->port;
-        $settings = $this->settings;
-        $factory = $this->serverFactory;
-        $afterStartEvent = function () {
-            $this->trigger(self::EVENT_AFTER_START);
-        };
-        $afterStopEvent = function () {
-            $this->isRunning = false;
-            $this->server = null;
-            $this->trigger(self::EVENT_AFTER_STOP);
-        };
-
-        $this->isRunning = true;
-
-        // Initialize coroutine-safe atomic counter
-        $this->activeRequests = new Atomic(0);
-
-        // Initialize signal handler
-        $this->signalHandler = new SignalHandler();
-        $this->setupShutdownCallbacks();
-        $this->signalHandler->register();
-
-        try {
-            Coroutine\run(function () use ($factory, $host, $port, $settings, $dispatcher, $afterStartEvent, $afterStopEvent): void {
-                $this->server = $factory($host, $port);
-                $this->applyCoroutineServerSettings($settings);
-
-                $server = $this->server;
-                $afterStartEvent();
-
-                // Pre-warm connection pools in coroutine context before handling requests
-                if (method_exists($dispatcher, 'prewarm')) {
-                    $dispatcher->prewarm();
-                }
-
-                $this->server->handle('/', function (Request $request, Response $response) use ($dispatcher, $server): void {
-                    $this->handleRequest($request, $response, $dispatcher, $server);
-                });
-
-                try {
-                    $this->server->start();
-                } finally {
-                    if ($this->signalHandler !== null) {
-                        $this->signalHandler->unregister();
-                    }
-                    $afterStopEvent();
-                }
-            });
-        } catch (\Swoole\ExitException $e) {
-            // Swoole exit is expected during graceful shutdown
-        }
-    }
-
-    /**
-     * Applies settings supported by Swoole coroutine HTTP server.
-     *
-     * @param array<string, mixed> $settings
-     */
-    private function applyCoroutineServerSettings(array $settings): void
-    {
-        $coroutineSettings = [];
-
-        if (isset($settings['backlog'])) {
-            $coroutineSettings['backlog'] = $settings['backlog'];
-        }
-        if (isset($settings['open_tcp_nodelay'])) {
-            $coroutineSettings['open_tcp_nodelay'] = $settings['open_tcp_nodelay'];
-        }
-        if (isset($settings['tcp_fastopen'])) {
-            $coroutineSettings['open_tcp_fastopen'] = $settings['tcp_fastopen'];
-        }
-
-        if ($this->enableNativeStaticHandler && $this->documentRoot !== null) {
-            $coroutineSettings['enable_static_handler'] = true;
-            $coroutineSettings['document_root'] = $this->documentRoot;
-        }
-
-        if ($coroutineSettings !== []) {
-            $this->server->set($coroutineSettings);
-        }
-    }
-
-    /**
-     * Sets up shutdown callbacks for graceful shutdown
-     */
-    private function setupShutdownCallbacks(): void
-    {
-        if (!$this->signalHandler) {
-            return;
-        }
-
-        // Priority 10: Wait for in-flight requests
-        $this->signalHandler->onShutdown('wait_requests', function () {
-            $this->signalHandler->waitForInflightRequests(
-                fn() => $this->activeRequests !== null && $this->activeRequests->get() > 0,
-                5.0
+        // SWOOLE_BASE with worker_num=1 runs in single-process mode without a Manager process,
+        // where Server::reload() fails with ERRNO 507. Switch explicitly for --watch dev mode.
+        if ($this->watch && $effectiveMode === SWOOLE_BASE && $workerNum === 1) {
+            $effectiveMode = SWOOLE_PROCESS;
+            fwrite(
+                STDOUT,
+                "[yii2-swoole] Notice: --watch requires a Manager process for reload(); using SWOOLE_PROCESS for single-worker watch mode.\n"
             );
-        }, 10);
+        }
 
-        // Priority 20: Stop accepting new requests (shutdown server)
-        $this->signalHandler->onShutdown('stop_server', function () {
-            if ($this->server) {
-                $this->server->shutdown();
+        $server = new SwooleHttpServer($this->host, $this->port, $effectiveMode);
+        $this->server = $server;
+
+        $server->set($this->buildSwooleSettings($workerNum, $effectiveMode));
+
+        $handler = null;
+        $reapTimerId = null;
+        $memoryWarned = false;
+
+        $server->on('Start', function (SwooleHttpServer $srv) use ($workerNum, $effectiveMode): void {
+            $modeLabel = $effectiveMode === SWOOLE_PROCESS ? 'SWOOLE_PROCESS' : 'SWOOLE_BASE';
+            fwrite(STDOUT, sprintf(
+                "Yii2-Swoole HTTP server started at http://%s:%d (mode=%s, workers=%d, pid=%d%s)\n",
+                $this->host,
+                $this->port,
+                $modeLabel,
+                $workerNum,
+                $srv->master_pid,
+                $this->watch ? ', watch=ON' : ''
+            ));
+        });
+
+        $server->on('WorkerStart', function (SwooleHttpServer $srv, int $workerId) use (&$handler, &$reapTimerId, &$memoryWarned): void {
+            $this->configureErrorLog();
+
+            if (function_exists('opcache_reset') && $this->watch) {
+                @opcache_reset();
             }
-        }, 20);
 
-        // Priority 30: Flush logs
-        $this->signalHandler->onShutdown('flush_logs', function () {
-            ShutdownHelper::flushLogs(false);
-        }, 30);
+            $handler = new RequestHandler(
+                webConfig: $this->webConfig,
+                serverHeader: $this->serverHeader,
+                sendRequestIdHeader: $this->sendRequestIdHeader
+            );
 
-        // Priority 40: Close connection pools
-        $this->signalHandler->onShutdown('close_pools', function () {
-            ShutdownHelper::closeConnectionPools(false);
-        }, 40);
-    }
+            try {
+                $handler->bootstrap();
+                RuntimeStats::bind($srv, $handler, $workerId);
 
-    /**
-     * Stops swoole coroutine http server.
-     *
-     * This triggers event: beforeStop.
-     */
-    public function stop(): void
-    {
-        if (!$this->isRunning || $this->server === null) {
-            return;
-        }
+                $maintenanceInterval = $this->poolReapInterval > 0
+                    ? $this->poolReapInterval
+                    : ($this->maxMemoryMb > 0 ? 15.0 : 0.0);
 
-        $this->trigger(self::EVENT_BEFORE_STOP);
+                if ($maintenanceInterval > 0) {
+                    $reapTimerId = Timer::tick((int) ($maintenanceInterval * 1000), function () use ($srv, $workerId, &$memoryWarned): void {
+                        if ($this->poolReapInterval > 0) {
+                            PoolRegistry::reapAllIdle();
+                        }
 
-        $this->server->shutdown();
-    }
+                        if ($this->maxMemoryMb > 0) {
+                            $usageMb = memory_get_usage(true) / 1048576;
+                            if ($usageMb >= $this->maxMemoryMb) {
+                                // Only recycle worker when a Manager process exists to respawn it
+                                if ($srv->manager_pid > 0) {
+                                    error_log(sprintf(
+                                        '[yii2-swoole] Worker #%d (pid=%d) memory %.2fMB reached limit %dMB; triggering graceful restart.',
+                                        $workerId,
+                                        (int) getmypid(),
+                                        $usageMb,
+                                        $this->maxMemoryMb
+                                    ));
+                                    $srv->stop($workerId);
+                                } elseif (!$memoryWarned) {
+                                    $memoryWarned = true;
+                                    error_log(sprintf(
+                                        '[yii2-swoole] Worker #%d (pid=%d) memory %.2fMB reached limit %dMB, but single-process SWOOLE_BASE has no Manager to respawn it.',
+                                        $workerId,
+                                        (int) getmypid(),
+                                        $usageMb,
+                                        $this->maxMemoryMb
+                                    ));
+                                }
+                            }
+                        }
+                    });
+                }
 
-    /**
-     * Handles a single HTTP request.
-     *
-     * This method processes each incoming request through the following steps:
-     * 1. Set custom server header (if configured)
-     * 2. Check for shutdown request
-     * 3. Initialize request scope
-     * 4. Track active request count
-     * 5. Serve static files or dispatch to Yii2
-     * 6. Handle errors and cleanup
-     *
-     * @param Request $request The Swoole HTTP request
-     * @param Response $response The Swoole HTTP response
-     * @param RequestDispatcherInterface $dispatcher The request dispatcher
-     * @param SwooleCoroutineHttpServer $server The server instance
-     */
-    private function handleRequest(
-        Request $request,
-        Response $response,
-        RequestDispatcherInterface $dispatcher,
-        SwooleCoroutineHttpServer $server
-    ): void {
-        // Set custom server header if configured
-        if ($this->serverHeader !== null) {
-            $response->header('Server', $this->serverHeader);
-        }
+                $this->trigger(self::EVENT_WORKER_START);
+            } catch (Throwable $e) {
+                $msg = sprintf(
+                    "[yii2-swoole] Worker #%d bootstrap failed: %s\n%s",
+                    $workerId,
+                    $e->getMessage(),
+                    $e->getTraceAsString()
+                );
+                error_log($msg);
+                if (!$this->daemonize) {
+                    fwrite(STDERR, $msg . "\n");
+                }
+                $srv->shutdown();
+            }
+        });
 
-        // Check if shutdown is requested
-        if ($this->signalHandler && $this->signalHandler->isShutdownRequested()) {
-            $response->status(503);
-            $response->header('Content-Type', 'text/plain; charset=UTF-8');
-            $response->end('Server is shutting down');
-            return;
-        }
-
-        $requestScope = $this->enableRequestTracking ? RequestScope::start($request) : null;
-
-        // Track active requests (coroutine-safe)
-        $this->activeRequests?->add(1);
-
-        try {
-            // Try to serve static files first using dedicated static file server
-            if ($this->staticFileServer !== null && $this->staticFileServer->serve($request, $response)) {
+        $server->on('Request', static function (SwooleRequest $request, SwooleResponse $response) use (&$handler): void {
+            if ($handler === null) {
+                $response->status(503);
+                $response->header('Content-Type', 'text/plain; charset=UTF-8');
+                $response->end('Worker not ready');
                 return;
             }
 
-            // Process through middleware pipeline, then dispatch to Yii2
-            $dispatcher->dispatch($request, $response, $server);
-        } catch (\Throwable $e) {
-            if (!$response->isWritable()) {
-                return;
+            $handler->handle($request, $response);
+        });
+
+        // Clear periodic timers and stop background log workers on WorkerExit while keeping
+        // connection pools alive until all in-flight requests drain.
+        $server->on('WorkerExit', static function (SwooleHttpServer $srv, int $workerId) use (&$handler, &$reapTimerId): void {
+            if ($reapTimerId !== null) {
+                Timer::clear($reapTimerId);
+                $reapTimerId = null;
             }
 
-            $response->status(500);
-            $response->header('Content-Type', 'text/plain; charset=UTF-8');
-            $body = $this->formatErrorResponse($e);
-            $response->end($body);
-        } finally {
-            $requestScope?->clear();
-            $this->activeRequests?->sub(1);
+            if ($handler instanceof RequestHandler) {
+                $handler->stopBackgroundTasks();
+            }
+        });
+
+        $server->on('WorkerStop', function (SwooleHttpServer $srv, int $workerId) use (&$handler, &$reapTimerId): void {
+            if ($reapTimerId !== null) {
+                Timer::clear($reapTimerId);
+                $reapTimerId = null;
+            }
+
+            if ($handler instanceof RequestHandler) {
+                $handler->shutdown();
+            }
+
+            RuntimeStats::reset();
+            $this->trigger(self::EVENT_WORKER_STOP);
+        });
+
+        if ($this->watch) {
+            $watchDirs = $this->resolveWatchDirectories();
+            if ($watchDirs !== []) {
+                (new FileWatcher($watchDirs))->attach($server);
+            }
         }
+
+        $server->start();
     }
 
     /**
-     * Formats error response with debugging information.
-     *
-     * @param \Throwable $e The exception
-     * @return string The formatted error response
+     * @return array<string, mixed>
      */
-    private function formatErrorResponse(\Throwable $e): string
+    public function buildSwooleSettings(int $workerNum, ?int $effectiveMode = null): array
     {
-        if (!defined('YII_DEBUG') || !YII_DEBUG) {
-            return 'Internal Server Error';
+        $mode = $effectiveMode ?? $this->mode;
+
+        $defaults = [
+            'worker_num' => $workerNum,
+            'enable_coroutine' => true,
+            'hook_flags' => $this->hookFlags,
+            'max_coroutine' => $this->maxCoroutine,
+            'max_request' => $this->maxRequest,
+            'reload_async' => true,
+            'max_wait_time' => $this->maxWaitTime,
+            'backlog' => 2048,
+            'open_tcp_nodelay' => true,
+            'http_compression' => $this->enableCompression,
+            'pid_file' => (string) $this->pidFile,
+            'daemonize' => $this->daemonize,
+            'log_level' => (defined('YII_DEBUG') && YII_DEBUG) ? SWOOLE_LOG_INFO : SWOOLE_LOG_WARNING,
+        ];
+
+        if ($this->logFile !== null && $this->logFile !== '') {
+            $defaults['log_file'] = $this->logFile;
+            $defaults['log_date_format'] = '%Y-%m-%d %H:%M:%S';
+            if ($this->logRotation !== null) {
+                $defaults['log_rotation'] = $this->logRotation;
+            }
         }
 
-        $output = "Error: {$e->getMessage()}\n\n";
-        $requestScope = $this->enableRequestTracking ? RequestScope::current() : null;
-        $output .= "Request ID: " . ($requestScope?->requestId ?? '') . "\n";
-        $output .= "Coroutine ID: " . Coroutine::getCid() . "\n";
-
-        if ($requestScope !== null) {
-            $output .= "URI: {$requestScope->uri}\n";
+        if ($this->maxRequest > 0) {
+            $defaults['max_request_grace'] = max(1, (int) ($this->maxRequest * 0.2));
         }
 
-        $output .= "\nStack Trace:\n" . $e->getTraceAsString();
+        if ($workerNum > 1 && $mode === SWOOLE_BASE) {
+            $defaults['enable_reuse_port'] = true;
+        }
 
-        return $output;
+        if ($this->documentRoot !== null && is_dir($this->documentRoot)) {
+            $defaults['enable_static_handler'] = true;
+            $defaults['document_root'] = $this->documentRoot;
+        }
+
+        return array_merge($defaults, $this->settings);
     }
 
+    private function ensureDirectoryForFile(string $filePath): void
+    {
+        $dir = dirname($filePath);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+    }
+
+    private function configureErrorLog(): void
+    {
+        if ($this->errorLogFile === null || $this->errorLogFile === '') {
+            return;
+        }
+
+        $this->ensureDirectoryForFile($this->errorLogFile);
+        ini_set('log_errors', '1');
+        ini_set('error_log', $this->errorLogFile);
+    }
+
+    /**
+     * @return string[]
+     */
+    private function resolveWatchDirectories(): array
+    {
+        if ($this->watchDirs !== []) {
+            return array_map(static fn (string $dir): string => Yii::getAlias($dir), $this->watchDirs);
+        }
+
+        $appPath = Yii::getAlias('@app', false);
+        if (is_string($appPath) && is_dir($appPath)) {
+            return [$appPath];
+        }
+
+        return is_string($this->webConfig) ? [dirname($this->webConfig, 2)] : [];
+    }
 }

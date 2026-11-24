@@ -1,54 +1,47 @@
 <?php
 
+use Dacheng\Yii2\Swoole\{Log, Redis, Web};
+use yii\helpers\BaseArrayHelper;
+
 $commonConfig = require __DIR__ . '/common.php';
 
 $config = [
+    'class' => Web\Application::class,
     'id' => 'yii2-swoole-example',
     'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
     'components' => [
         'request' => [
-            'class' => \Dacheng\Yii2\Swoole\Runtime\CoroutineRequest::class,
             'cookieValidationKey' => 'test-secret-key',
             'enableCsrfValidation' => false,
             'parsers' => [
-                'application/json' => 'yii\web\JsonParser',
+                'application/json' => \yii\web\JsonParser::class,
             ],
         ],
         'response' => [
-            'format' => \yii\web\Response::FORMAT_JSON,
+            'format' => Web\Response::FORMAT_JSON,
         ],
         'session' => [
-            'class' => \Dacheng\Yii2\Swoole\Session\CoroutineSession::class,
+            'class' => Redis\Session::class,
             'redis' => 'redis',
             'keyPrefix' => 'phpsession:',
-            'timeout' => (int)(getenv('YII_SESSION_TIMEOUT') ?: 1440),
+            'timeout' => (int) (getenv('YII_SESSION_TIMEOUT') ?: 1440),
         ],
         'user' => [
-            'class' => \Dacheng\Yii2\Swoole\User\CoroutineUser::class,
             'identityClass' => \app\models\UserIdentity::class,
             'enableAutoLogin' => false,
         ],
         'log' => [
             'traceLevel' => YII_DEBUG ? 3 : 0,
-            'flushInterval' => 1,
+            'flushInterval' => 100,
             'targets' => [
                 [
-                    'class' => \Dacheng\Yii2\Swoole\Log\CoroutineFileTarget::class,
+                    'class' => Log\FileTarget::class,
                     'levels' => YII_DEBUG ? ['error', 'warning', 'info'] : ['error', 'warning'],
-                    'exportInterval' => 1,
+                    'exportInterval' => 100,
                     'logFile' => '@runtime/logs/app.log',
-                    'maxFileSize' => 10240, // 10MB
+                    'maxFileSize' => 10240,
                     'maxLogFiles' => 5,
-                    'enableRotation' => true,
-                    'logWorkerConfig' => [
-                        'batchInterval' => (int)(getenv('YII_LOG_BATCH_INTERVAL') ?: 100),
-                        'maxBufferSize' => (int)(getenv('YII_LOG_MAX_BUFFER_SIZE') ?: 100000),
-                        'bufferWarningThreshold' => (int)(getenv('YII_LOG_BUFFER_WARNING_THRESHOLD') ?: 90000),
-                        'maxBufferWarnings' => (int)(getenv('YII_LOG_MAX_BUFFER_WARNINGS') ?: 10),
-                    ],
-                    'categories' => [],
-                    'except' => [],
                     'logVars' => [],
                     'microtime' => true,
                 ],
@@ -59,29 +52,11 @@ $config = [
             'showScriptName' => false,
             'rules' => [
                 '' => 'site/index',
-                '<controller:\\w+>/<action:\\w+>' => '<controller>/<action>',
+                '<controller:\w+>/<action:\w+>' => '<controller>/<action>',
             ],
         ],
     ],
     'params' => require __DIR__ . '/params.php',
 ];
 
-$config = \yii\helpers\BaseArrayHelper::merge($commonConfig, $config);
-
-if (YII_ENV_DEV) {
-    if (class_exists('yii\\debug\\Module')) {
-        $config['bootstrap'][] = 'debug';
-        $config['modules']['debug'] = [
-            'class' => 'yii\\debug\\Module',
-        ];
-    }
-
-    if (class_exists('yii\\gii\\Module')) {
-        $config['bootstrap'][] = 'gii';
-        $config['modules']['gii'] = [
-            'class' => 'yii\\gii\\Module',
-        ];
-    }
-}
-
-return $config;
+return BaseArrayHelper::merge($commonConfig, $config);

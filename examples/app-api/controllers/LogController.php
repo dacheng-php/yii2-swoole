@@ -177,7 +177,7 @@ class LogController extends Controller
         $targets = Yii::$app->log->targets ?? [];
         
         foreach ($targets as $target) {
-            if ($target instanceof \Dacheng\Yii2\Swoole\Log\CoroutineFileTarget) {
+            if ($target instanceof \Dacheng\Yii2\Swoole\Log\FileTarget) {
                 $logTarget = $target;
                 break;
             }
@@ -186,7 +186,7 @@ class LogController extends Controller
         if ($logTarget === null) {
             return [
                 'success' => false,
-                'message' => 'CoroutineFileTarget not found in log configuration',
+                'message' => 'Log\\FileTarget not found in log configuration',
             ];
         }
 

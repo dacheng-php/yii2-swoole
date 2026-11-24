@@ -2,103 +2,70 @@
 
 ## 项目定位
 
-Yii2-Swoole 让传统 Yii2 应用在 PHP Swoole 引擎上运行。应用安装并完成必要配置后，业务代码的运行模式应整体进入 coroutine-native 状态，既能继续运行既有 Yii2 业务，也能在应用层深入使用 Swoole 协程能力。
+Yii2-Swoole 让传统 Yii2 应用通过少量显式配置适配后，安全、稳定、高效地运行在 PHP Swoole 协程引擎之上。既能无缝运行既有 Yii2 业务，也能以 Yii2 风格直接使用连接池、结构化并发、协程队列和协程 HTTP 客户端等能力。
 
-本项目不是重写 Yii2，也不是做完整 Swoole 框架；它是 Yii2 与 Swoole 协程运行时之间的生产级适配层，同时也是面向 Yii2 业务代码的 Swoole 协程组件扩展。
+本项目不是重写 Yii2，也不是做完整 Swoole 框架；它是 Yii2 与 Swoole 协程运行时之间的生产级适配层与协程组件扩展。
 
 ## 核心目标
 
-- **运行既有 Yii2 应用**：让传统 Yii2 应用可以平滑迁移到 Swoole HTTP Server，并在长生命周期、并发协程环境下保持原有业务语义正确。
-- **提供协程原生能力**：提供好用、稳定、Yii2 风格的 Swoole 协程组件，让业务代码可以直接使用连接池、非阻塞 I/O、协程队列、协程 HTTP 客户端等能力。
-- 充分利用 Swoole 协程异步能力，提高 I/O 密集场景吞吐与延迟表现。
-- 提供稳定、可配置、可观测的数据库与 Redis 连接池。
-- 改造 Yii2 原有组件，使其适配 coroutine-native 运行模式。
+- **显式适配既有 Yii2 应用**：1:1 镜像 Yii2 原生命名空间与声明式配置习惯，吸收 Zig 编程哲学（一切显式化、不隐藏、不暗含、简洁直接实用），拒绝隐式配置篡改与隐藏控制流。
+- **最大化释放 Swoole 性能与资源效率**：基于 `Swoole\Http\Server`（默认 `SWOOLE_BASE` 模式 + 协程 + `SO_REUSEPORT`），共享组件 O(1) 缓存直达、请求级组件零反射原型克隆、LIFO 纯内存栈连接池热路径、C 级静态文件与压缩、平滑 `reload_async` 与 `maxMemoryMb` 内存水位守卫。
+- **极致安全与稳定**：严格协程状态隔离、`trustedHosts` 代理头过滤、安全反序列化默认值、断线即时丢弃坏连接、多 Worker 日志轮转锁与原子队列迁移。
+- **优秀且克制的 DX**：标准 `yii` 入口脚本零改动，提供 `Server\ConfigValidator` 配置预检、`--watch` 开发热重载、CLI 运维管控（`start/stop/reload/status/check`）、`Coroutine\Concurrent` 结构化并发原语和 `Server\RuntimeStats` 可观测快照。
 - 保留 Yii2 源码一贯的可读、可理解、可扩展风格。
 
 ## 非目标
 
-- 不优化 CPU 密集型任务；CPU 密集工作应交给独立 Worker 或外部服务。
-- 不引入多进程应用模型；当前设计以单进程协程 HTTP 服务为主。
-- 不追求完整覆盖所有 Swoole 能力；优先 HTTP、协程 I/O、连接池和常用 Yii2 组件。
+- 不优化 CPU 密集型计算；CPU 密集型任务应交给异步队列、独立 Worker 或外部服务。
+- 不追求覆盖所有 Swoole 协议（如内置 WebSocket/gRPC 框架）；聚焦 HTTP、协程 I/O、连接池与常用 Yii2 组件。
 - 不支持 PHP < 8.1、Swoole < 6.0。
+- 不引入隐式配置重写器、隐藏 `ini_set` 或靠 `argv` 猜测控制流的魔法层。
 - 不为了“更现代”而改写 Yii2 的核心编程模型。
 
-## 目录职责
+## 目录职责（10 个扁平包，单向依赖）
 
-- `src/`: 核心源码。包含 HTTP Server、请求调度、协程应用、连接池、DB/Redis/Cache/Queue/Log/Session/User/HttpClient 等适配组件。
-- `examples/`: 可运行示例。用于验证传统 Yii2 应用如何接入本项目，不应承载核心逻辑。
-- `docs/`: 面向使用者和维护者的文档。内容必须与当前实现一致。
+- `src/`: 核心源码（单层扁平包，无深层子目录嵌套）。
+  - `Console/`: `SwooleController`（CLI 运维入口，隔离 `yii\console` 依赖）。
+  - `Server/`: `HttpServer` (`SWOOLE_BASE`/`SWOOLE_PROCESS`)、`RequestHandler`、`ProcessManager`、`FileWatcher`、`ConfigValidator`、`RuntimeStats`。
+  - `Web/`: `Application`、`Request`、`Response`、`UploadedFile`、`ErrorHandler`、`User`、`RequestContext`（1:1 镜像 `yii\web\*`）。
+  - `Coroutine/`: `Concurrent`、`Context`、`Container`、`ResettableInterface`（纯协程并发原语与隔离契约）。
+  - `Pool/`: `ConnectionPool` (LIFO)、`PoolConfig`、`PooledConnection`、`PoolAwareInterface`、`PoolRegistry`、`PoolException` 异常族。
+  - `Db/`: `Connection`、`Command`（1:1 镜像 `yii\db\*`）。
+  - `Redis/`: `Connection`、`Cache`、`Session`（1:1 镜像 `yii\redis\*`）。
+  - `Log/`: `Logger`、`FileTarget`、`CoroutineTargetInterface`、`LogWorker`、`LogFileRotator`（1:1 镜像 `yii\log\*`）。
+  - `HttpClient/`: `Client`、`Transport`（1:1 镜像 `yii\httpclient\*`）。
+  - `Queue/`: `RedisQueue`、`RedisCommand`、`RedisStatisticsProvider`、`Loop`（1:1 镜像 `yii\queue\*`）。
+- `examples/`: 可运行示例（`app-api`, `app-basic`, `native-swoole` 基准对照），不应承载核心逻辑。
+- `docs/`: 面向使用者和维护者的架构与使用文档，必须与当前实现一致。
 
 ## 设计原则
 
-1. **Yii2 优先**
-   - 优先沿用 Yii2 的组件、配置、命名、异常、日志与生命周期风格。
-   - 能通过继承 Yii2 基类完成的适配，优先继承。
-   - 当继承会导致大量反射访问私有属性、性能明显受损或语义不清时，允许直接重写，但必须保持 Yii2 使用体验一致。
+1. **Yii2 优先 + 显式化控制**
+   - 沿用 Yii2 的组件、配置、命名、事件、异常、日志与生命周期风格；配置所见即运行所得。
+   - 能通过继承 Yii2 基类完成的适配，优先继承；避免反射篡改私有属性。
+   - 错误与非法配置 fail-fast 显式暴露，不静默吞错，不静默重试非幂等操作。
 
-2. **协程安全**
-   - 禁止用全局状态、静态属性或单例保存请求级数据。
-   - 请求上下文、连接占用、用户态状态必须按协程隔离。
-   - 任何长生命周期对象都必须明确区分共享配置与请求状态。
+2. **严格协程安全与 Fork 边界**
+   - 禁止用全局状态、静态属性或超全局变量（`$_GET`/`$_POST`/`$_COOKIE`/`$_FILES`/`$_SERVER`/`$_SESSION`）保存请求级数据。
+   - `Yii::$app` 是进程内常驻代理，其请求态属性（`controller`, `requestedRoute`, `requestedAction`, `requestedParams`, `state`, `language`, `layout`, `loadedModules`, `homeUrl`）与请求级组件（`request`, `response`, `session`, `user`, `view`, `assetManager`, `errorHandler`）必须严格按协程隔离。
+   - 严守 Fork 边界：Yii2 `Web\Application` 和所有连接池仅在 `onWorkerStart` 之后初始化，绝不在 Master 启动前预建连接；`Server\HttpServer` 仅配置在 `console.php`。
 
-3. **非阻塞 I/O**
-   - 协程上下文内的数据库、Redis、HTTP、队列、日志等 I/O 必须优先使用 Swoole 协程友好的实现。
-   - 不得在热点路径引入阻塞调用、忙等循环或无界等待。
-   - 无法做到非阻塞时，必须在代码和文档中明确边界、风险与替代方案。
+3. **非阻塞 I/O 与自动资源管理**
+   - 协程内依赖 `SWOOLE_HOOK_ALL` 与协程安全组件，禁止在热点路径引入阻塞调用或无界等待。
+   - 连接借出必须通过 `Coroutine::defer()` 自动兜底归还（覆盖主请求协程、子协程、异常与超时路径），并通过 `PooledConnection` 状态机防止 double-release。
+   - `onWorkerExit` 必须立即清理所有周期性 Timer 与后台 `Log\LogWorker`，保障 `reload_async` 快速无损退出。
 
-4. **自动资源管理**
-   - 借出的连接必须在请求、任务或协程结束时可靠归还。
-   - 异常、超时、客户端断开、服务器关闭等路径必须释放资源。
-   - 连接池必须支持超时、容量限制、关闭与统计，不允许无限制创建连接。
+4. **热点路径极简与故障隔离**
+   - 共享组件在 `warmup()` 实例化并缓存于 `$sharedInstances` O(1) 直达；请求级组件采用原型克隆（预实例化无状态 parsers/formatters）绕过每请求反射。
+   - 单个请求、协程、连接或队列任务失败不应影响整个 Worker。
 
-5. **故障隔离**
-   - 单个请求、协程、连接或队列任务失败，不应导致整个服务器不可用。
-   - 连接池耗尽、连接失效、序列化失败、日志写入失败等情况必须有明确错误路径。
-   - 优先使用可恢复失败；确需中断时必须提供可诊断日志。
-
-6. **简洁可维护**
-   - 代码应像 Yii2 源码一样直观：职责清楚、命名稳定、控制流可读。
-   - 避免过度抽象、重复包装、魔法行为和难以追踪的隐式副作用。
-   - 只在真实复杂度出现时引入抽象；不要为了模式而模式。
-
-## 连接池规范
-
-- 连接池组件必须提供 `enableCoroutinePooling` 开关，便于兼容传统 Yii2 行为与排障。
-- 池配置必须至少考虑最大活跃连接数、等待超时、连接创建失败、连接归还和关闭。
-- 连接借出与归还必须成对出现，并覆盖异常路径。
-- 池化实现不得泄漏请求状态到后续请求。
-- 热点路径避免反射、重复配置解析和不必要对象创建。
-
-## 组件适配规范
-
-- 保持 Yii2 组件配置方式兼容，优先做到替换 `class` 即可接入。
-- 面向业务层开放的协程组件必须保持 Yii2 风格：配置清晰、依赖明确、错误可诊断、可在应用代码中直接组合使用。
-- 新增公开 API 必须有明确用途，不为未来猜测性场景预留复杂接口。
-- 日志使用 `Yii::getLogger()` 或 Yii2 日志体系，不使用 `error_log()` 作为常规路径。
-- 异常类型和错误消息应有助于定位配置错误、运行时错误和资源耗尽。
-- 用户可见行为应尽量与 Yii2 原组件一致；不一致时必须在文档中说明。
-
-## 并发与生命周期要求
-
-- 每个请求结束后必须清理请求、响应、用户、session、连接、日志缓冲等请求级状态。
-- 长生命周期服务启动、停止、重载和关闭路径必须可重复、可诊断。
-- 不得假设 PHP-FPM 的“请求结束即进程清空”模型仍然存在。
-- 对协程间共享对象的写操作必须证明安全，无法证明时改为协程局部状态。
-
-## 质量要求
-
-- 修改前先理解 Yii2 原始组件语义和当前适配层职责。
-- 优先做小而完整的改动；不要把局部修复扩展成大规模重写。
-- 删除冗余代码时必须确认没有兼容性或生命周期影响。
-- 性能优化必须服务于明确瓶颈，不能牺牲正确性、可读性和 Yii2 兼容性。
-- 文档、示例和实现必须保持一致；示例不得依赖未实现能力。
-- 架构演进或局部重构时，不做任何兼容保护代码；以代码清洁、职责清晰和长期可维护为目标，直接更新实现、文档和示例到新的架构语义。
+5. **架构演进原则**
+   - 架构演进或局部重构时，不做兼容保护代码；以代码清洁、职责清晰和长期可维护为目标，直接更新实现、文档和示例到新的架构语义。
 
 ## 验证要求
 
-- 涉及代码变更时，至少执行可用的语法检查、静态检查或测试命令。
-- 涉及协程、连接池、资源释放的改动，必须验证成功路径、异常路径和超时/耗尽路径。
-- 涉及 Yii2 兼容性的改动，必须对比原组件行为或给出明确兼容性说明。
+- 涉及代码变更时，至少执行语法检查（`php -l`）和真实 Swoole 运行时并发/故障/生命周期验证。
+- 涉及协程、连接池、资源释放的改动，必须验证成功路径、异常路径、超时/耗尽路径与子协程自动归还。
 - 无法执行完整验证时，必须说明原因、已做的替代检查和残余风险。
 
 ## Agent 工作规则
