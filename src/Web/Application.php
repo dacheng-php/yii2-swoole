@@ -147,6 +147,11 @@ class Application extends BaseApplication
 
     public function init(): void
     {
+        // Build sharedComponentMap before parent::init() / bootstrap() so shared components
+        // accessed by extension bootstraps (e.g. i18n, log, queue) inside onWorkerStart
+        // coroutines are instantiated as shared singletons instead of coroutine-local clones.
+        $this->rebuildSharedComponentMap();
+
         parent::init();
 
         $this->defaultLanguage = is_string($this->language) ? $this->language : 'en-US';
