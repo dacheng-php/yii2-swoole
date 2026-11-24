@@ -116,9 +116,9 @@ class SiteController extends Controller
         $redisStats = null;
         $hasDb = false;
 
-        // Check if this coroutine has a DB instance
+        // Check if the worker-scoped shared DB component has been initialized
         if (Yii::$app instanceof \Dacheng\Yii2\Swoole\Web\Application) {
-            $hasDb = Yii::$app->has('db', true);  // Check if instance exists
+            $hasDb = Yii::$app->has('db', true);
         }
 
         if (Yii::$app->has('db')) {
@@ -148,7 +148,7 @@ class SiteController extends Controller
         return $this->asJson([
             'db_pool' => $dbStats,
             'redis_pool' => $redisStats,
-            'this_coroutine_has_db_instance' => $hasDb,
+            'db_component_initialized' => $hasDb,
             'coroutine_id' => \Swoole\Coroutine::getCid(),
         ]);
     }

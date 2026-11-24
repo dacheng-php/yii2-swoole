@@ -5,6 +5,7 @@ namespace app\controllers;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
+use Dacheng\Yii2\Swoole\Coroutine\Concurrent;
 use Dacheng\Yii2\Swoole\Redis\Connection as RedisConnection;
 use Swoole\Coroutine;
 
@@ -92,35 +93,33 @@ class RedisController extends Controller
     public function actionConcurrent()
     {
         $count = (int) Yii::$app->request->get('count', 10);
-        $count = min($count, 100); // Limit to 100
+        $count = max(1, min($count, 100)); // Limit to 100
 
         $redis = $this->getRedis();
-        $results = [];
         $start = microtime(true);
 
-        // Launch concurrent operations
+        $tasks = [];
         for ($i = 0; $i < $count; $i++) {
-            Coroutine::create(function() use ($i, &$results) {
+            $tasks[$i] = static function () use ($i): array {
                 $redis = Yii::$app->redis;
-                $key = "test:concurrent:" . uniqid() . ":$i";
+                $key = 'test:concurrent:' . uniqid('', true) . ":$i";
                 $value = "value_$i";
-                
+
                 $redis->set($key, $value);
                 $retrieved = $redis->get($key);
                 $redis->del($key);
-                
-                $results[$i] = [
+
+                return [
                     'success' => $retrieved === $value,
                     'coroutine_id' => Coroutine::getCid(),
                 ];
-            });
+            };
         }
 
-        // Wait for all to complete
-        Coroutine::sleep(0.1);
+        $results = Concurrent::run($tasks, concurrency: 20);
 
-        $elapsed = microtime(true) - $start;
-        $successful = count(array_filter($results, fn($r) => $r['success']));
+        $elapsed = max(0.0001, microtime(true) - $start);
+        $successful = count(array_filter($results, static fn (array $r): bool => $r['success']));
 
         return [
             'success' => true,

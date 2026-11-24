@@ -5,10 +5,10 @@ API example application demonstrating **yii2-swoole** extension features.
 ## What is yii2-swoole?
 
 A Yii2 extension that provides:
-- **Single-process Coroutine HTTP Server** - High-concurrency request handling without worker processes
-- **Connection Pools** - Efficient database and Redis connection management
-- **Coroutine-safe Components** - Session, User, Queue, and Log components for concurrent execution
-- **Non-blocking I/O** - All I/O operations run in coroutines without blocking
+- **Multi-worker `SWOOLE_BASE` Coroutine HTTP Server** - IPC-free multi-core scaling with `SO_REUSEPORT`, `reload_async`, and memory high-watermark recycling
+- **LIFO Connection Pools** - Coroutine-safe database and Redis connection pooling with automatic `Coroutine::defer()` release
+- **Coroutine-safe Components** - 1:1 Yii2-mirrored Web, Db, Redis, Cache, Session, HttpClient, Queue, and Log components
+- **Structured Concurrency & Observability** - `Coroutine\Concurrent`, `Server\ConfigValidator`, and `Server\RuntimeStats`
 
 ## Quick Start
 
@@ -22,19 +22,30 @@ composer install
 chmod +x yii
 ```
 
+### Preflight Check
+
+```bash
+php yii swoole/check
+```
+
 ### Start Server
 
 ```bash
-./yii swoole/start
+# Development mode (auto reload on code changes)
+php yii swoole/start --watch --workers=1
+
+# Production mode (multi-worker SWOOLE_BASE with CLI OPcache)
+php -d opcache.enable_cli=1 yii swoole/start
 ```
 
 Server runs on `http://127.0.0.1:9501`
 
-### Stop Server
+### Operations
 
 ```bash
-./yii swoole/stop
-# or press Ctrl+C
+php yii swoole/status   # Check status & PID
+php yii swoole/reload   # Graceful worker reload (SIGUSR1)
+php yii swoole/stop     # Graceful shutdown (SIGTERM)
 ```
 
 ## Demo Endpoints
@@ -65,6 +76,9 @@ curl http://localhost:9501/health/live
 
 # Readiness probe (ready to serve traffic)
 curl http://localhost:9501/health/ready
+
+# Runtime telemetry snapshot (Server\RuntimeStats)
+curl http://localhost:9501/health/stats
 ```
 
 ### Connection Pools
@@ -166,51 +180,55 @@ curl http://localhost:9501/log/stress?count=1000
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Swoole Coroutine HTTP Server (Single Process)  │
-├─────────────────────────────────────────────────┤
-│  Request → Coroutine → Application → Response   │
-├─────────────────────────────────────────────────┤
-│  Connection Pools:                              │
-│  ├─ Database Pool (max: 10 connections)        │
-│  └─ Redis Pool (max: 20 connections)           │
-├─────────────────────────────────────────────────┤
-│  Background Workers:                            │
-│  ├─ Queue Worker (coroutine-based)             │
-│  └─ Log Worker (coroutine channel)             │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Swoole HTTP Server (SWOOLE_BASE, multi-worker)          │
+├──────────────────────────────────────────────────────────┤
+│  Worker Process (onWorkerStart)                          │
+│  ├─ Request → Coroutine → Web\Application → Response     │
+│  ├─ Connection Pools (per-worker LIFO):                  │
+│  │  ├─ Db\Connection Pool (default maxActive: 10)        │
+│  │  └─ Redis\Connection Pool (default maxActive: 20)     │
+│  └─ Async Log\LogWorker (buffered flush + rotation lock) │
+├──────────────────────────────────────────────────────────┤
+│  Separate Console Worker: php yii queue/listen           │
+│  └─ Queue\RedisQueue (Coroutine\run + bounded workers)   │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## Configuration
 
 Key configuration files:
-- `config/common.php` - Shared configuration (pools, queue, Swoole server)
-- `config/web.php` - Web application (session, user, routes)
-- `config/console.php` - Console commands
+- `config/common.php` - Shared components (`db`, `redis`, `cache`, `httpClient`, `queue`)
+- `config/web.php` - Web application (`Web\Application`, `request`, `response`, `session`, `user`, `log`, `urlManager`)
+- `config/console.php` - Console commands & `Server\HttpServer` (strictly kept out of Web workers)
 
 ### Environment Variables
 
 ```bash
+# Swoole HTTP Server
+SWOOLE_HOST=127.0.0.1
+SWOOLE_PORT=9501
+SWOOLE_WORKERS=0
+
 # Redis
 YII_REDIS_HOST=127.0.0.1
 YII_REDIS_PORT=6379
 YII_REDIS_DATABASE=0
+YII_REDIS_PASSWORD=
 YII_REDIS_POOL_MAX_ACTIVE=20
+YII_REDIS_POOL_MIN_IDLE=0
+YII_REDIS_POOL_WAIT_TIMEOUT=3.0
 
 # Database
 YII_DB_DSN="mysql:host=127.0.0.1;dbname=yii2swoole"
 YII_DB_USERNAME=root
 YII_DB_PASSWORD=
 YII_DB_POOL_MAX_ACTIVE=10
+YII_DB_POOL_MIN_IDLE=0
+YII_DB_POOL_WAIT_TIMEOUT=3.0
 
 # Queue
 YII_QUEUE_CONCURRENCY=10
-
-# Log
-YII_LOG_BATCH_INTERVAL=100
-YII_LOG_MAX_BUFFER_SIZE=100000
-YII_LOG_BUFFER_WARNING_THRESHOLD=90000
-YII_LOG_MAX_BUFFER_WARNINGS=10
 
 # Session
 YII_SESSION_TIMEOUT=1440

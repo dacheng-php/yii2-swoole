@@ -2,6 +2,7 @@
 
 namespace app\controllers;
 
+use Dacheng\Yii2\Swoole\Coroutine\Concurrent;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
@@ -80,27 +81,29 @@ class LogController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $count = (int)Yii::$app->request->get('count', 10000);
-        $concurrent = (int)Yii::$app->request->get('concurrent', 10);
+        $count = max(1, (int) Yii::$app->request->get('count', 10000));
+        $concurrent = max(1, min(100, (int) Yii::$app->request->get('concurrent', 10)));
 
         $startTime = microtime(true);
 
-        // Simulate concurrent logging from multiple coroutines
-        $counters = [];
+        // Run concurrent logging tasks with structured concurrency
+        $baseBatch = intdiv($count, $concurrent);
+        $remainder = $count % $concurrent;
+        $tasks = [];
         for ($i = 0; $i < $concurrent; $i++) {
-            go(function () use ($count, $i, &$counters) {
-                $batchSize = (int)($count / 10); // Divide work
+            $batchSize = $baseBatch + ($i < $remainder ? 1 : 0);
+            $tasks[$i] = static function () use ($i, $batchSize): int {
                 for ($j = 0; $j < $batchSize; $j++) {
                     Yii::info("Coroutine {$i}: Stress test message #{$j}", __METHOD__);
                 }
-                $counters[$i] = $batchSize;
-            });
+
+                return $batchSize;
+            };
         }
 
-        // Wait for all coroutines to complete (simple approach)
-        \Swoole\Coroutine::sleep(0.1);
+        $counters = Concurrent::run($tasks, concurrency: $concurrent);
 
-        $duration = microtime(true) - $startTime;
+        $duration = max(0.0001, microtime(true) - $startTime);
         $totalLogged = array_sum($counters);
 
         return [
@@ -210,6 +213,7 @@ class LogController extends Controller
             'max_log_files' => $logTarget->maxLogFiles,
             'rotation_enabled' => $logTarget->enableRotation,
             'worker_initialized' => $logTarget->getWorker() !== null,
+            'worker_stats' => $logTarget->getWorker()?->getStats(),
         ];
 
         return $result;

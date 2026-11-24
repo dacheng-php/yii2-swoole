@@ -16,7 +16,11 @@ return [
             'dataTimeout' => 1.0,
             'pool' => [
                 'maxActive' => (int) (getenv('YII_REDIS_POOL_MAX_ACTIVE') ?: 20),
-                'waitTimeout' => (float) (getenv('YII_REDIS_POOL_WAIT_TIMEOUT') ?: 5.0),
+                'minIdle' => (int) (getenv('YII_REDIS_POOL_MIN_IDLE') ?: 0),
+                'waitTimeout' => (float) (getenv('YII_REDIS_POOL_WAIT_TIMEOUT') ?: 3.0),
+                'maxIdleTime' => 60.0,
+                'maxLifetime' => 3600.0,
+                'idlePingInterval' => 30.0,
             ],
         ],
         'cache' => [
@@ -41,7 +45,11 @@ return [
             'schemaCache' => 'cache',
             'pool' => [
                 'maxActive' => (int) (getenv('YII_DB_POOL_MAX_ACTIVE') ?: 10),
-                'waitTimeout' => (float) (getenv('YII_DB_POOL_WAIT_TIMEOUT') ?: 5.0),
+                'minIdle' => (int) (getenv('YII_DB_POOL_MIN_IDLE') ?: 0),
+                'waitTimeout' => (float) (getenv('YII_DB_POOL_WAIT_TIMEOUT') ?: 3.0),
+                'maxIdleTime' => 60.0,
+                'maxLifetime' => 3600.0,
+                'idlePingInterval' => 30.0,
             ],
         ],
     ],

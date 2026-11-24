@@ -44,7 +44,7 @@ class HealthController extends Controller
                 $dbTime = round((microtime(true) - $dbStartTime) * 1000, 2);
                 
                 $checks['database'] = [
-                    'status' => $result === 1 ? 'ok' : 'error',
+                    'status' => (int) $result === 1 ? 'ok' : 'error',
                     'response_time_ms' => $dbTime,
                 ];
                 
@@ -70,7 +70,7 @@ class HealthController extends Controller
                 $redisTime = round((microtime(true) - $redisStartTime) * 1000, 2);
                 
                 $checks['redis'] = [
-                    'status' => $result === 'PONG' ? 'ok' : 'error',
+                    'status' => ($result === true || $result === 'PONG') ? 'ok' : 'error',
                     'response_time_ms' => $redisTime,
                 ];
                 

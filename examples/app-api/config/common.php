@@ -1,6 +1,6 @@
 <?php
 
-use Dacheng\Yii2\Swoole\{Db, Queue, Redis};
+use Dacheng\Yii2\Swoole\{Db, HttpClient, Queue, Redis};
 
 return [
     'bootstrap' => ['queue'],
@@ -17,13 +17,19 @@ return [
             'pool' => [
                 'maxActive' => (int) (getenv('YII_REDIS_POOL_MAX_ACTIVE') ?: 20),
                 'minIdle' => (int) (getenv('YII_REDIS_POOL_MIN_IDLE') ?: 0),
-                'waitTimeout' => (float) (getenv('YII_REDIS_POOL_WAIT_TIMEOUT') ?: 5.0),
+                'waitTimeout' => (float) (getenv('YII_REDIS_POOL_WAIT_TIMEOUT') ?: 3.0),
+                'maxIdleTime' => 60.0,
+                'maxLifetime' => 3600.0,
+                'idlePingInterval' => 30.0,
             ],
         ],
         'cache' => [
             'class' => Redis\Cache::class,
             'redis' => 'redis',
             'keyPrefix' => 'yii2-cache:',
+        ],
+        'httpClient' => [
+            'class' => HttpClient\Client::class,
         ],
         'queue' => [
             'class' => Queue\RedisQueue::class,
@@ -43,7 +49,10 @@ return [
             'pool' => [
                 'maxActive' => (int) (getenv('YII_DB_POOL_MAX_ACTIVE') ?: 10),
                 'minIdle' => (int) (getenv('YII_DB_POOL_MIN_IDLE') ?: 0),
-                'waitTimeout' => (float) (getenv('YII_DB_POOL_WAIT_TIMEOUT') ?: 5.0),
+                'waitTimeout' => (float) (getenv('YII_DB_POOL_WAIT_TIMEOUT') ?: 3.0),
+                'maxIdleTime' => 60.0,
+                'maxLifetime' => 3600.0,
+                'idlePingInterval' => 30.0,
             ],
         ],
     ],

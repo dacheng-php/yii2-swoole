@@ -14,11 +14,11 @@ $config = [
         '@bower' => '@vendor/bower-asset',
         '@npm' => '@vendor/npm-asset',
         '@webroot' => dirname(__DIR__) . '/web',
+        '@web' => '',
     ],
     'components' => [
         'request' => [
             'cookieValidationKey' => 'test-secret-key',
-            'enableCsrfValidation' => false,
             'baseUrl' => '',
             'scriptUrl' => '/index.php',
             'parsers' => [
@@ -36,7 +36,7 @@ $config = [
             'timeout' => (int) (getenv('YII_SESSION_TIMEOUT') ?: 1440),
         ],
         'user' => [
-            'identityClass' => 'app\models\User',
+            'identityClass' => \app\models\User::class,
             'enableAutoLogin' => false,
         ],
         'errorHandler' => [
