@@ -1,5 +1,6 @@
-# Exclude development and example files from distribution
-/examples export-ignore
-/.gitignore export-ignore
+# Exclude development, agent, and example files from Packagist distribution archives
+/.github export-ignore
 /.gitattributes export-ignore
-/Claude.md export-ignore
+/.gitignore export-ignore
+/AGENTS.md export-ignore
+/examples export-ignore

@@ -1,44 +1,58 @@
 {
   "name": "dacheng-php/yii2-swoole",
-  "description": "Yii2 Swoole extension, provides coroutine http server and more coroutine features.",
-  "keywords": [
-    "Yii2",
-    "Swoole",
-    "Coroutine",
-    "HTTP Server",
-    "Connection Pools"
-  ],
+  "description": "Production-ready Swoole 6 coroutine runtime adapter and async components for Yii2.",
   "type": "yii2-extension",
+  "keywords": [
+    "yii2",
+    "swoole",
+    "coroutine",
+    "http-server",
+    "connection-pool",
+    "async"
+  ],
+  "homepage": "https://github.com/dacheng-php/yii2-swoole",
   "license": "MIT",
+  "authors": [
+    {
+      "name": "Dacheng Gao",
+      "homepage": "https://github.com/dacheng-gao"
+    }
+  ],
+  "support": {
+    "issues": "https://github.com/dacheng-php/yii2-swoole/issues",
+    "source": "https://github.com/dacheng-php/yii2-swoole"
+  },
   "require": {
     "php": ">=8.1",
+    "ext-mbstring": "*",
     "ext-swoole": "^6.0",
-    "yiisoft/yii2": "^2.0"
+    "yiisoft/yii2": "^2.0.45"
   },
   "require-dev": {
-    "swoole/ide-helper": "6.0.2",
-    "yidas/yii2-composer-bower-skip": "2.0.13",
+    "swoole/ide-helper": "^6.0",
+    "yidas/yii2-composer-bower-skip": "^2.0",
     "yiisoft/yii2-httpclient": "^2.0",
     "yiisoft/yii2-queue": "^2.0",
     "yiisoft/yii2-redis": "^2.0"
+  },
+  "suggest": {
+    "ext-pdo": "Required to use Dacheng\\Yii2\\Swoole\\Db\\Connection pooled database component.",
+    "yiisoft/yii2-httpclient": "Required to use coroutine non-blocking HttpClient.",
+    "yiisoft/yii2-queue": "Required to use coroutine RedisQueue workers.",
+    "yiisoft/yii2-redis": "Required to use coroutine Redis connection pool, cache, and session."
   },
   "autoload": {
     "psr-4": {
       "Dacheng\\Yii2\\Swoole\\": "src/"
     }
   },
-  "extra": {
-    "branch-alias": {
-      "dev-main": "1.0.x-dev"
-    }
-  },
-  "minimum-stability": "stable",
-  "prefer-stable": true,
   "config": {
-    "optimize-autoloader": true,
-    "apcu-autoloader": true,
     "allow-plugins": {
       "yiisoft/yii2-composer": true
-    }
+    },
+    "sort-packages": true
+  },
+  "scripts": {
+    "lint": "php -r 'foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(\"src\")) as $f) { if ($f->getExtension() === \"php\") { passthru(\"php -l \" . escapeshellarg($f->getPathname()), $c); if ($c !== 0) exit($c); } }'"
   }
 }
