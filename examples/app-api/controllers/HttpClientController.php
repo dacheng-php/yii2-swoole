@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
-use Dacheng\Yii2\Swoole\HttpClient\Client;
-use Dacheng\Yii2\Swoole\HttpClient\Transport;
+use yii2swoole\httpclient\Client;
+use yii2swoole\httpclient\Transport;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;

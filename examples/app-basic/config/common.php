@@ -1,12 +1,12 @@
 <?php
 
-use Dacheng\Yii2\Swoole\{Db, Queue, Redis};
+use yii2swoole\{db, queue, redis};
 
 return [
     'bootstrap' => ['queue'],
     'components' => [
         'redis' => [
-            'class' => Redis\Connection::class,
+            'class' => redis\Connection::class,
             'hostname' => getenv('YII_REDIS_HOST') ?: '127.0.0.1',
             'port' => (int) (getenv('YII_REDIS_PORT') ?: 6379),
             'database' => (int) (getenv('YII_REDIS_DATABASE') ?: 0),
@@ -24,18 +24,18 @@ return [
             ],
         ],
         'cache' => [
-            'class' => Redis\Cache::class,
+            'class' => redis\Cache::class,
             'redis' => 'redis',
             'keyPrefix' => 'yii2-cache:',
         ],
         'queue' => [
-            'class' => Queue\RedisQueue::class,
+            'class' => queue\RedisQueue::class,
             'redis' => 'redis',
             'channel' => 'yii2-queue:',
             'concurrency' => (int) (getenv('YII_QUEUE_CONCURRENCY') ?: 10),
         ],
         'db' => [
-            'class' => Db\Connection::class,
+            'class' => db\Connection::class,
             'dsn' => getenv('YII_DB_DSN') ?: 'mysql:host=127.0.0.1;dbname=yii2basic',
             'username' => getenv('YII_DB_USERNAME') ?: 'root',
             'password' => getenv('YII_DB_PASSWORD') ?: '',

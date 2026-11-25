@@ -1,6 +1,6 @@
 <?php
 
-use Dacheng\Yii2\Swoole\{Console, Log, Server};
+use yii2swoole\{console, log, server};
 use yii\helpers\BaseArrayHelper;
 
 $commonConfig = require __DIR__ . '/common.php';
@@ -12,7 +12,7 @@ $config = [
     'controllerNamespace' => 'app\commands',
     'controllerMap' => [
         'swoole' => [
-            'class' => Console\SwooleController::class,
+            'class' => console\SwooleController::class,
             'serverComponent' => 'swooleHttpServer',
         ],
     ],
@@ -23,7 +23,7 @@ $config = [
     ],
     'components' => [
         'swooleHttpServer' => [
-            'class' => Server\HttpServer::class,
+            'class' => server\HttpServer::class,
             'host' => getenv('SWOOLE_HOST') ?: '127.0.0.1',
             'port' => (int) (getenv('SWOOLE_PORT') ?: 9501),
             'mode' => SWOOLE_BASE,
@@ -42,7 +42,7 @@ $config = [
             'flushInterval' => 100,
             'targets' => [
                 [
-                    'class' => Log\FileTarget::class,
+                    'class' => log\FileTarget::class,
                     'levels' => YII_DEBUG ? ['error', 'warning', 'info'] : ['error', 'warning'],
                     'exportInterval' => 100,
                     'logFile' => '@runtime/logs/console.log',

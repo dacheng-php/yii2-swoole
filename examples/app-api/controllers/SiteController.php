@@ -117,7 +117,7 @@ class SiteController extends Controller
         $hasDb = false;
 
         // Check if the worker-scoped shared DB component has been initialized
-        if (Yii::$app instanceof \Dacheng\Yii2\Swoole\Web\Application) {
+        if (Yii::$app instanceof \yii2swoole\web\Application) {
             $hasDb = Yii::$app->has('db', true);
         }
 

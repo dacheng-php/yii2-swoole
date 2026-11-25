@@ -1,12 +1,12 @@
 <?php
 
-use Dacheng\Yii2\Swoole\{Log, Redis, Web};
+use yii2swoole\{log, redis, web};
 use yii\helpers\BaseArrayHelper;
 
 $commonConfig = require __DIR__ . '/common.php';
 
 $config = [
-    'class' => Web\Application::class,
+    'class' => web\Application::class,
     'id' => 'yii2-swoole-example',
     'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
@@ -19,10 +19,10 @@ $config = [
             ],
         ],
         'response' => [
-            'format' => Web\Response::FORMAT_JSON,
+            'format' => web\Response::FORMAT_JSON,
         ],
         'session' => [
-            'class' => Redis\Session::class,
+            'class' => redis\Session::class,
             'redis' => 'redis',
             'keyPrefix' => 'phpsession:',
             'timeout' => (int) (getenv('YII_SESSION_TIMEOUT') ?: 1440),
@@ -36,7 +36,7 @@ $config = [
             'flushInterval' => 100,
             'targets' => [
                 [
-                    'class' => Log\FileTarget::class,
+                    'class' => log\FileTarget::class,
                     'levels' => YII_DEBUG ? ['error', 'warning', 'info'] : ['error', 'warning'],
                     'exportInterval' => 100,
                     'logFile' => '@runtime/logs/app.log',

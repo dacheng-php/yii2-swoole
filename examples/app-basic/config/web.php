@@ -1,12 +1,12 @@
 <?php
 
-use Dacheng\Yii2\Swoole\{Debug, Log, Redis, Web};
+use yii2swoole\{debug, log, redis, web};
 use yii\helpers\BaseArrayHelper;
 
 $commonConfig = require __DIR__ . '/common.php';
 
 $config = [
-    'class' => Web\Application::class,
+    'class' => web\Application::class,
     'id' => 'basic',
     'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
@@ -30,7 +30,7 @@ $config = [
             'baseUrl' => '/assets',
         ],
         'session' => [
-            'class' => Redis\Session::class,
+            'class' => redis\Session::class,
             'redis' => 'redis',
             'keyPrefix' => 'phpsession:',
             'timeout' => (int) (getenv('YII_SESSION_TIMEOUT') ?: 1440),
@@ -52,7 +52,7 @@ $config = [
             'flushInterval' => 100,
             'targets' => [
                 [
-                    'class' => Log\FileTarget::class,
+                    'class' => log\FileTarget::class,
                     'levels' => YII_DEBUG ? ['error', 'warning', 'info'] : ['error', 'warning'],
                     'exportInterval' => 100,
                     'logFile' => '@runtime/logs/app.log',
@@ -78,7 +78,7 @@ $config = [
 if (YII_ENV_DEV && class_exists(\yii\debug\Module::class)) {
     $config['bootstrap'][] = 'debug';
     $config['modules']['debug'] = [
-        'class' => Debug\Module::class,
+        'class' => debug\Module::class,
         'allowedIPs' => ['127.0.0.1', '::1'],
     ];
 }

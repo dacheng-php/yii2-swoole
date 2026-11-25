@@ -44,15 +44,15 @@
     "yiisoft/yii2-redis": "<2.0.0"
   },
   "suggest": {
-    "ext-pdo": "Required to use Dacheng\\Yii2\\Swoole\\Db\\Connection pooled database component.",
+    "ext-pdo": "Required to use yii2swoole\\db\\Connection pooled database component.",
     "yiisoft/yii2-debug": "Required (^2.1) to use the coroutine-safe Swoole Debug Toolbar and SwoolePanel.",
     "yiisoft/yii2-httpclient": "Required (^2.0) to use coroutine non-blocking HttpClient.",
     "yiisoft/yii2-queue": "Required (^2.3.7) to use coroutine RedisQueue workers.",
-    "yiisoft/yii2-redis": "Required (^2.0) to use coroutine Redis connection pool, cache, and default Redis\\Session."
+    "yiisoft/yii2-redis": "Required (^2.0) to use coroutine Redis connection pool, cache, and default redis\\Session."
   },
   "autoload": {
     "psr-4": {
-      "Dacheng\\Yii2\\Swoole\\": "src/"
+      "yii2swoole\\": "src/"
     }
   },
   "config": {

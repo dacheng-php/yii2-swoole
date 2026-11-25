@@ -17,10 +17,10 @@
 
 ## 架构与权威入口
 
-- `src/`：单层扁平包，严格单向依赖（`Console\` → `Server\` → 协程基座与组件包；组件层不反向依赖 `Server\`）：
-  - **运维与引擎层**：`Console/`、`Server/`（HTTP 及未来可扩展的 WebSocket / TCP / UDP / Gateway 等 Server 与进程管控）。
-  - **通用协程基座**：`Coroutine/`、`Pool/`（跨协议复用的协程上下文隔离、并发原语、LIFO 状态机连接池）。
-  - **Yii2 1:1 镜像组件**：`Web/`、`Db/`、`Redis/`、`Log/`、`HttpClient/`、`Queue/`。
+- `src/`：单层扁平包，严格单向依赖（`console\` → `server\` → 协程基座与组件包；组件层不反向依赖 `server\`）：
+  - **运维与引擎层**：`console/`、`server/`（HTTP 及未来可扩展的 WebSocket / TCP / UDP / Gateway 等 Server 与进程管控）。
+  - **通用协程基座**：`coroutine/`、`pool/`（跨协议复用的协程上下文隔离、并发原语、LIFO 状态机连接池）。
+  - **Yii2 1:1 镜像组件**：`web/`、`db/`、`redis/`、`log/`、`httpclient/`、`queue/`、`debug/`。
 - `examples/`：可运行示例与性能对照（`app-api`、`app-basic`、`native-swoole`），不承载核心逻辑。
 - `docs/` 与 `README.md`：快速入口见 `README.md`，核心机制与实现细节见 `docs/architecture.md`，迁移与运维见 `docs/guide.md`。架构或配置语义变化时须同步更新文档与示例。
 
@@ -44,7 +44,7 @@
    - `onWorkerExit` 必须立即清理所有 Timer 与后台协程，保障 `reload_async` 快速无损退出；单请求、单连接或单任务失败不得拖垮整个 Worker。
 
 5. **多协议扩展与清洁演进**
-   - 扩展 SSE、WebSocket、TCP/UDP Server 或 Gateway 时，复用 `Coroutine/` 与 `Pool/` 基座，保持协议层独立、显式、可组合，不污染既有 HTTP 热路径。
+   - 扩展 SSE、WebSocket、TCP/UDP Server 或 Gateway 时，复用 `coroutine/` 与 `pool/` 基座，保持协议层独立、显式、可组合，不污染既有 HTTP 热路径。
    - 架构演进或局部重构时不做历史兼容保护代码，直接将实现、文档与示例更新到目标语义。
 
 ## 验证要求

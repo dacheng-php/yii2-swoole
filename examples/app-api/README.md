@@ -8,7 +8,7 @@ A Yii2 extension that provides:
 - **Multi-worker `SWOOLE_BASE` Coroutine HTTP Server** - IPC-free multi-core scaling with `SO_REUSEPORT`, `reload_async`, and memory high-watermark recycling
 - **LIFO Connection Pools** - Coroutine-safe database and Redis connection pooling with automatic `Coroutine::defer()` release
 - **Coroutine-safe Components** - 1:1 Yii2-mirrored Web, Db, Redis, Cache, Session, HttpClient, Queue, and Log components
-- **Structured Concurrency & Observability** - `Coroutine\Concurrent`, `Server\ConfigValidator`, and `Server\RuntimeStats`
+- **Structured Concurrency & Observability** - `coroutine\Concurrent`, `server\ConfigValidator`, and `server\RuntimeStats`
 
 ## Quick Start
 
@@ -77,7 +77,7 @@ curl http://localhost:9501/health/live
 # Readiness probe (ready to serve traffic)
 curl http://localhost:9501/health/ready
 
-# Runtime telemetry snapshot (Server\RuntimeStats)
+# Runtime telemetry snapshot (server\RuntimeStats)
 curl http://localhost:9501/health/stats
 ```
 
@@ -177,7 +177,7 @@ curl http://localhost:9501/log/stats
 curl http://localhost:9501/log/stress?count=1000
 ```
 
-### File Upload & Download (`Web\UploadedFile`)
+### File Upload & Download (`web\UploadedFile`)
 ```bash
 # List uploaded files & endpoints
 curl http://localhost:9501/upload
@@ -205,7 +205,7 @@ curl -X POST \
   -F "UploadForm[files][]=@composer.json" \
   http://localhost:9501/upload/model
 
-# Download an uploaded file via Web\Response::sendFile()
+# Download an uploaded file via web\Response::sendFile()
 curl -O -J "http://localhost:9501/upload/download?name=<stored_name>"
 
 # Cleanup uploaded demo files
@@ -219,14 +219,14 @@ curl -X POST http://localhost:9501/upload/cleanup
 │  Swoole HTTP Server (SWOOLE_BASE, multi-worker)          │
 ├──────────────────────────────────────────────────────────┤
 │  Worker Process (onWorkerStart)                          │
-│  ├─ Request → Coroutine → Web\Application → Response     │
+│  ├─ Request → Coroutine → web\Application → Response     │
 │  ├─ Connection Pools (per-worker LIFO):                  │
-│  │  ├─ Db\Connection Pool (default maxActive: 10)        │
-│  │  └─ Redis\Connection Pool (default maxActive: 20)     │
-│  └─ Async Log\LogWorker (buffered flush + rotation lock) │
+│  │  ├─ db\Connection Pool (default maxActive: 10)        │
+│  │  └─ redis\Connection Pool (default maxActive: 20)     │
+│  └─ Async log\LogWorker (buffered flush + rotation lock) │
 ├──────────────────────────────────────────────────────────┤
 │  Separate Console Worker: php yii queue/listen           │
-│  └─ Queue\RedisQueue (Coroutine\run + bounded workers)   │
+│  └─ queue\RedisQueue (Coroutine\run + bounded workers)   │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -234,8 +234,8 @@ curl -X POST http://localhost:9501/upload/cleanup
 
 Key configuration files:
 - `config/common.php` - Shared components (`db`, `redis`, `cache`, `httpClient`, `queue`)
-- `config/web.php` - Web application (`Web\Application`, `request`, `response`, `session`, `user`, `log`, `urlManager`)
-- `config/console.php` - Console commands & `Server\HttpServer` (strictly kept out of Web workers)
+- `config/web.php` - Web application (`web\Application`, `request`, `response`, `session`, `user`, `log`, `urlManager`)
+- `config/console.php` - Console commands & `server\HttpServer` (strictly kept out of Web workers)
 
 ### Environment Variables
 
@@ -281,7 +281,7 @@ YII_SESSION_TIMEOUT=1440
 | Session | `SessionController` | Coroutine-safe session storage via Redis (`Yii::$app->session`) |
 | Queue | `QueueController` | Background job processing with coroutines |
 | Logging | `LogController` | Async logging with coroutine channels |
-| File Upload | `UploadController` | Coroutine-safe single/multiple/model uploads (`Web\UploadedFile`) & download (`sendFile`) |
+| File Upload | `UploadController` | Coroutine-safe single/multiple/model uploads (`web\UploadedFile`) & download (`sendFile`) |
 
 ## Performance Testing
 

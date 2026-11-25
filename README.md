@@ -15,7 +15,7 @@ Run traditional Yii2 applications on a resident **Swoole 6** coroutine engine wi
 
 ## Features
 
-- **1:1 Yii2-Mirrored Components**: Drop-in coroutine-safe namespaces (`Web`, `Db`, `Redis`, `Log`, `HttpClient`, `Queue`) that mirror Yii2 core structure for low-friction migration and clean IDE support.
+- **1:1 Yii2-Mirrored Components**: Drop-in coroutine-safe namespaces (`web`, `db`, `redis`, `log`, `httpclient`, `queue`) that mirror Yii2 core structure for low-friction migration and clean IDE support.
 - **Multi-Worker Coroutine HTTP Server**: Built on Swoole 6 with static file serving, `--watch` auto-reload for development, zero-downtime graceful `reload`, and memory high-watermark recycling.
 - **Strict Coroutine Isolation**: Request-scoped application properties and `request`, `response`, `session`, `user`, and `UploadedFile` are isolated per coroutine — no cross-request leaks or superglobal pollution.
 - **Elastic Connection Pools**: Built-in coroutine pools for PDO databases and Redis with `minIdle` prewarming, `maxActive` bounds, idle shrinking, health checks before checkout, and automatic `Coroutine::defer()` release.
@@ -40,15 +40,15 @@ Your standard Yii2 `yii` console entry script (`new yii\console\Application($con
 
 ### 1. Adapt `config/web.php`
 
-Set the application class to `Web\Application` (`request`, `response`, `errorHandler`, and `user` default to coroutine-safe implementations automatically; `session` defaults to `Redis\Session` when `yiisoft/yii2-redis` is installed and never falls back to native `$_SESSION`), and swap in pooled/coroutine components as needed:
+Set the application class to `web\Application` (`request`, `response`, `errorHandler`, and `user` default to coroutine-safe implementations automatically; `session` defaults to `redis\Session` when `yiisoft/yii2-redis` is installed and never falls back to native `$_SESSION`), and swap in pooled/coroutine components as needed:
 
 ```php
 <?php
 
-use Dacheng\Yii2\Swoole\{Db, Log, Redis, Web};
+use yii2swoole\{db, log, redis, web};
 
 return [
-    'class' => Web\Application::class,
+    'class' => web\Application::class,
     'id' => 'my-app',
     'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
@@ -60,7 +60,7 @@ return [
             ],
         ],
         'db' => [
-            'class' => Db\Connection::class,
+            'class' => db\Connection::class,
             'dsn' => 'mysql:host=127.0.0.1;dbname=myapp',
             'username' => 'root',
             'password' => '',
@@ -72,7 +72,7 @@ return [
             ],
         ],
         'redis' => [
-            'class' => Redis\Connection::class,
+            'class' => redis\Connection::class,
             'hostname' => '127.0.0.1',
             'port' => 6379,
             'pool' => [
@@ -81,17 +81,17 @@ return [
             ],
         ],
         'cache' => [
-            'class' => Redis\Cache::class,
+            'class' => redis\Cache::class,
             'redis' => 'redis',
         ],
         'session' => [
-            'class' => Redis\Session::class,
+            'class' => redis\Session::class,
             'redis' => 'redis',
         ],
         'log' => [
             'targets' => [
                 [
-                    'class' => Log\FileTarget::class,
+                    'class' => log\FileTarget::class,
                     'levels' => ['error', 'warning'],
                 ],
             ],
@@ -102,25 +102,25 @@ return [
 
 ### 2. Register the Server & CLI Controller in `config/console.php`
 
-> Note: Keep `Server\HttpServer` exclusively in `console.php` — do not place it in `common.php` or `web.php`.
+> Note: Keep `server\HttpServer` exclusively in `console.php` — do not place it in `common.php` or `web.php`.
 
 ```php
 <?php
 
-use Dacheng\Yii2\Swoole\{Console, Server};
+use yii2swoole\{console, server};
 
 return [
     'id' => 'my-console',
     'basePath' => dirname(__DIR__),
     'controllerMap' => [
         'swoole' => [
-            'class' => Console\SwooleController::class,
+            'class' => console\SwooleController::class,
             'serverComponent' => 'swooleHttpServer',
         ],
     ],
     'components' => [
         'swooleHttpServer' => [
-            'class' => Server\HttpServer::class,
+            'class' => server\HttpServer::class,
             'host' => '127.0.0.1',
             'port' => 9501,
             'workers' => 4,
@@ -156,25 +156,25 @@ php yii swoole/stop     # Graceful shutdown (SIGTERM, drains active requests & p
 
 | Standard Yii2 Component | Yii2-Swoole Equivalent | Notes |
 | --- | --- | --- |
-| `yii\web\Application` | `Dacheng\Yii2\Swoole\Web\Application` | Coroutine-isolated app facade (defaults `request`, `response`, `errorHandler`, `user`, plus `session` when `yiisoft/yii2-redis` is installed) |
-| `yii\web\UploadedFile` | `Dacheng\Yii2\Swoole\Web\UploadedFile` | Coroutine-safe uploads (single, multiple, and Yii2 Model `FileValidator` support) |
-| `yii\db\Connection` | `Dacheng\Yii2\Swoole\Db\Connection` | Pooled PDO connection with health checks and broken-connection discard |
-| `yii\redis\Connection` | `Dacheng\Yii2\Swoole\Redis\Connection` | Pooled coroutine Redis connection |
-| `yii\redis\Cache` | `Dacheng\Yii2\Swoole\Redis\Cache` | Coroutine-safe Redis cache |
-| `yii\redis\Session` / `yii\web\Session` | `Dacheng\Yii2\Swoole\Redis\Session` | Coroutine-safe Redis session |
-| `yii\httpclient\Client` | `Dacheng\Yii2\Swoole\HttpClient\Client` | Non-blocking coroutine HTTP client with parallel batch requests |
-| `yii\queue\redis\Queue` | `Dacheng\Yii2\Swoole\Queue\RedisQueue` | Concurrent coroutine Redis queue (`php yii queue/listen`) |
-| `yii\log\FileTarget` | `Dacheng\Yii2\Swoole\Log\FileTarget` | Buffered async file logging with multi-worker lock-safe rotation |
-| `yii\debug\Module` | `Dacheng\Yii2\Swoole\Debug\Module` | Coroutine-safe Yii2 Debug Toolbar with built-in `SwoolePanel` (dev only) |
+| `yii\web\Application` | `yii2swoole\web\Application` | Coroutine-isolated app facade (defaults `request`, `response`, `errorHandler`, `user`, plus `session` when `yiisoft/yii2-redis` is installed) |
+| `yii\web\UploadedFile` | `yii2swoole\web\UploadedFile` | Coroutine-safe uploads (single, multiple, and Yii2 Model `FileValidator` support) |
+| `yii\db\Connection` | `yii2swoole\db\Connection` | Pooled PDO connection with health checks and broken-connection discard |
+| `yii\redis\Connection` | `yii2swoole\redis\Connection` | Pooled coroutine Redis connection |
+| `yii\redis\Cache` | `yii2swoole\redis\Cache` | Coroutine-safe Redis cache |
+| `yii\redis\Session` / `yii\web\Session` | `yii2swoole\redis\Session` | Coroutine-safe Redis session |
+| `yii\httpclient\Client` | `yii2swoole\httpclient\Client` | Non-blocking coroutine HTTP client with parallel batch requests |
+| `yii\queue\redis\Queue` | `yii2swoole\queue\RedisQueue` | Concurrent coroutine Redis queue (`php yii queue/listen`) |
+| `yii\log\FileTarget` | `yii2swoole\log\FileTarget` | Buffered async file logging with multi-worker lock-safe rotation |
+| `yii\debug\Module` | `yii2swoole\debug\Module` | Coroutine-safe Yii2 Debug Toolbar with built-in `SwoolePanel` (dev only) |
 
 ## Usage Highlights
 
-### Structured Concurrency (`Coroutine\Concurrent`)
+### Structured Concurrency (`coroutine\Concurrent`)
 
 Run multiple I/O tasks in parallel with bounded concurrency, safe exception capture, and automatic connection release:
 
 ```php
-use Dacheng\Yii2\Swoole\Coroutine\Concurrent;
+use yii2swoole\coroutine\Concurrent;
 
 $data = Concurrent::run([
     'user'    => fn () => User::findOne($id),
@@ -183,12 +183,12 @@ $data = Concurrent::run([
 ], concurrency: 10);
 ```
 
-### Coroutine-Safe File Uploads (`Web\UploadedFile`)
+### Coroutine-Safe File Uploads (`web\UploadedFile`)
 
 Replaces `$_FILES`-dependent `yii\web\UploadedFile` while staying compatible with Yii2 `FileValidator`:
 
 ```php
-use Dacheng\Yii2\Swoole\Web\UploadedFile;
+use yii2swoole\web\UploadedFile;
 
 $file = UploadedFile::getInstanceByName('avatar');
 if ($file !== null) {
@@ -196,12 +196,12 @@ if ($file !== null) {
 }
 ```
 
-### Runtime Telemetry Snapshot (`Server\RuntimeStats`)
+### Runtime Telemetry Snapshot (`server\RuntimeStats`)
 
 Expose worker, request, coroutine, and pool metrics on any health or monitoring endpoint:
 
 ```php
-use Dacheng\Yii2\Swoole\Server\RuntimeStats;
+use yii2swoole\server\RuntimeStats;
 
 public function actionStats(): array
 {

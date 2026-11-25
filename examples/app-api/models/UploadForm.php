@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
-use Dacheng\Yii2\Swoole\Web\UploadedFile;
+use yii2swoole\web\UploadedFile;
 use yii\base\Model;
 
 /**

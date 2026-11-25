@@ -5,8 +5,8 @@ namespace app\controllers;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
-use Dacheng\Yii2\Swoole\Coroutine\Concurrent;
-use Dacheng\Yii2\Swoole\Redis\Connection as RedisConnection;
+use yii2swoole\coroutine\Concurrent;
+use yii2swoole\redis\Connection as RedisConnection;
 use Swoole\Coroutine;
 
 class RedisController extends Controller

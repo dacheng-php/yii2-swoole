@@ -193,7 +193,7 @@ class HealthController extends Controller
      */
     public function actionStats()
     {
-        return $this->asJson(\Dacheng\Yii2\Swoole\Server\RuntimeStats::snapshot());
+        return $this->asJson(\yii2swoole\server\RuntimeStats::snapshot());
     }
 }
 

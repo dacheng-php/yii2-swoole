@@ -2,28 +2,28 @@
 
 ## 1. 传统 Yii2 应用显式迁移清单
 
-Yii2-Swoole 不隐藏配置改写、不替换 `yii` 入口脚本。所有协程组件 1:1 镜像 Yii2 官方命名空间，推荐使用 PHP 命名空间分组导入（`use Dacheng\Yii2\Swoole\{Db, Log, Redis, Web};`）：
+Yii2-Swoole 不隐藏配置改写、不替换 `yii` 入口脚本。所有协程组件 1:1 镜像 Yii2 官方命名空间，推荐使用 PHP 命名空间分组导入（`use yii2swoole\{db, log, redis, web};`）：
 
 1. **适配 `config/web.php`**：
-   - 显式声明 `'class' => Web\Application::class`。
-   - `request`、`response`、`errorHandler`、`user` 会通过 `Web\Application::coreComponents()` 自动使用协程安全实现；若原配置中显式写了 `'class' => \yii\web\Request::class` 等，请更新为 `Web\Request::class` 等或删去多余的 `class` 键。
+   - 显式声明 `'class' => web\Application::class`。
+   - `request`、`response`、`errorHandler`、`user` 会通过 `web\Application::coreComponents()` 自动使用协程安全实现；若原配置中显式写了 `'class' => \yii\web\Request::class` 等，请更新为 `web\Request::class` 等或删去多余的 `class` 键。
    - 若需要 JSON 请求体解析，显式配置 `'parsers' => ['application/json' => \yii\web\JsonParser::class]`。
    - 若应用部署在 Nginx/Envoy 等反向代理后，显式配置 `request.trustedHosts`（与标准 Yii2 一致），否则 `X-Forwarded-*` 头会被默认安全过滤。
    - 组件 1:1 映射表：
-     - `yii\web\Application` → `Dacheng\Yii2\Swoole\Web\Application`
-     - `yii\db\Connection` → `Dacheng\Yii2\Swoole\Db\Connection`（支持 `'pool' => [...]`）
-     - `yii\redis\Connection` → `Dacheng\Yii2\Swoole\Redis\Connection`（支持 `'pool' => [...]`）
-     - `yii\redis\Cache` → `Dacheng\Yii2\Swoole\Redis\Cache`
-     - `yii\redis\Session` / `yii\web\Session` → `Dacheng\Yii2\Swoole\Redis\Session`
-     - `yii\httpclient\Client` → `Dacheng\Yii2\Swoole\HttpClient\Client`
-     - `yii\queue\redis\Queue` → `Dacheng\Yii2\Swoole\Queue\RedisQueue`
-     - `yii\log\FileTarget` → `Dacheng\Yii2\Swoole\Log\FileTarget`
-     - `yii\debug\Module` → `Dacheng\Yii2\Swoole\Debug\Module`（仅开发环境启用，内置 `SwoolePanel`）
+     - `yii\web\Application` → `yii2swoole\web\Application`
+     - `yii\db\Connection` → `yii2swoole\db\Connection`（支持 `'pool' => [...]`）
+     - `yii\redis\Connection` → `yii2swoole\redis\Connection`（支持 `'pool' => [...]`）
+     - `yii\redis\Cache` → `yii2swoole\redis\Cache`
+     - `yii\redis\Session` / `yii\web\Session` → `yii2swoole\redis\Session`
+     - `yii\httpclient\Client` → `yii2swoole\httpclient\Client`
+     - `yii\queue\redis\Queue` → `yii2swoole\queue\RedisQueue`
+     - `yii\log\FileTarget` → `yii2swoole\log\FileTarget`
+     - `yii\debug\Module` → `yii2swoole\debug\Module`（仅开发环境启用，内置 `SwoolePanel`）
 2. **适配 `config/console.php`**：
-   - 显式在 `controllerMap` 注册 `'swoole' => Console\SwooleController::class`。
-   - 显式在 `components` 注册 `'swooleHttpServer' => ['class' => Server\HttpServer::class, 'webConfig' => __DIR__ . '/web.php', ...]`。
+   - 显式在 `controllerMap` 注册 `'swoole' => console\SwooleController::class`。
+   - 显式在 `components` 注册 `'swooleHttpServer' => ['class' => server\HttpServer::class, 'webConfig' => __DIR__ . '/web.php', ...]`。
    - **不要**把 `swooleHttpServer` 放进 `common.php`，确保它只存在于 Console 进程而不进入 Web Worker。
-   - 标准 `yii` 入口脚本保持 `new yii\console\Application($config)` **无需改动**；队列消费命令 `php yii queue/listen` 会在 `Queue\RedisCommand` 内部显式启动 `Coroutine\run()`。
+   - 标准 `yii` 入口脚本保持 `new yii\console\Application($config)` **无需改动**；队列消费命令 `php yii queue/listen` 会在 `queue\RedisCommand` 内部显式启动 `Coroutine\run()`。
 3. **运行启动前安全预检**：
    ```bash
    php yii swoole/check
@@ -34,24 +34,24 @@ Yii2-Swoole 不隐藏配置改写、不替换 `yii` 入口脚本。所有协程�
 
 | 禁止做法（PHP-FPM 习惯） | 正确做法（Coroutine-Native） |
 | --- | --- |
-| 直接读写 `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_SERVER` | 使用 `Yii::$app->request` 与 `Web\UploadedFile` |
-| 直接读写 `$_SESSION` 或调用 `session_start()` / `session_regenerate_id()` | 使用 `Yii::$app->session`（`Redis\Session`） |
+| 直接读写 `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_SERVER` | 使用 `Yii::$app->request` 与 `web\UploadedFile` |
+| 直接读写 `$_SESSION` 或调用 `session_start()` / `session_regenerate_id()` | 使用 `Yii::$app->session`（`redis\Session`） |
 | 直接调用 `header()`, `setcookie()`, `echo`, `exit()` / `die()` | 返回响应数据或操作 `Yii::$app->response`；异常直接 `throw` |
-| 用类 `static` 属性或全局数组缓存用户/请求上下文 | 使用 `Coroutine\Context::set()/get()` 或 `Web\RequestContext::current()` |
-| 在共享 `Db\Connection` 上配置 `masters`/`slaves` | 显式配置独立组件（如 `db` 与 `dbRead`）各自维护独立连接池 |
-| 在请求处理中执行同步 CPU 密集计算 | 卸载到 `Queue\RedisQueue` 或独立计算服务 |
+| 用类 `static` 属性或全局数组缓存用户/请求上下文 | 使用 `coroutine\Context::set()/get()` 或 `web\RequestContext::current()` |
+| 在共享 `db\Connection` 上配置 `masters`/`slaves` | 显式配置独立组件（如 `db` 与 `dbRead`）各自维护独立连接池 |
+| 在请求处理中执行同步 CPU 密集计算 | 卸载到 `queue\RedisQueue` 或独立计算服务 |
 | 在控制器中手动 `new PDO(...)` 不池化 | 统一使用 `Yii::$app->db` / `Yii::$app->redis` 连接池；长耗时操作前可显式 `$db->close()` 提前归还 |
 | 在 Session 中依赖反序列化任意 PHP 类 | 保持 `allowedClasses = false`（仅存标量/数组），必要时显式配置允许的类白名单 |
 
 ## 3. 连接池配置与容量规划
 
-`Db\Connection` 和 `Redis\Connection` 均通过单一的 `pool` 字段显式配置：
+`db\Connection` 和 `redis\Connection` 均通过单一的 `pool` 字段显式配置：
 
 ```php
-use Dacheng\Yii2\Swoole\Db;
+use yii2swoole\db;
 
 'db' => [
-    'class' => Db\Connection::class,
+    'class' => db\Connection::class,
     'dsn' => 'mysql:host=127.0.0.1;dbname=myapp',
     'username' => 'root',
     'password' => '',
@@ -97,10 +97,10 @@ php yii swoole/stop
 ## 5. 日志分流与队列说明
 
 - **三类日志各司其职（默认自动写入 `@runtime/logs/`）**：
-  - `@runtime/logs/app.log`：Yii2 业务日志（`Log\FileTarget` + `Log\LogWorker` 异步批量落盘 + 多 Worker 文件锁轮转；`onWorkerExit` / `onWorkerStop` 自动排空刷盘）。
-  - `@runtime/logs/swoole.log`：Swoole 引擎关键日志（由 `Server\HttpServer::$logFile` 控制，默认按天轮转 `SWOOLE_LOG_ROTATION_DAILY`；设为 `''` 输出到终端）。
-  - `@runtime/logs/error.log`：PHP 运行时错误、Worker 引导失败与 `error_log()` 兜底日志（由 `Server\HttpServer::$errorLogFile` 控制；设为 `''` 沿用 PHP 默认设置）。
-- **协程队列**：直接运行 `php yii queue/listen` 或 `php yii queue/run`，`Queue\RedisCommand` 自动进入 Swoole 协程环境，按 `concurrency` 并发消费；过期/延迟任务通过 Redis Lua 原子迁移，每个 Job 在独立子协程中执行并在结束时自动归还 DB/Redis 连接。
+  - `@runtime/logs/app.log`：Yii2 业务日志（`log\FileTarget` + `log\LogWorker` 异步批量落盘 + 多 Worker 文件锁轮转；`onWorkerExit` / `onWorkerStop` 自动排空刷盘）。
+  - `@runtime/logs/swoole.log`：Swoole 引擎关键日志（由 `server\HttpServer::$logFile` 控制，默认按天轮转 `SWOOLE_LOG_ROTATION_DAILY`；设为 `''` 输出到终端）。
+  - `@runtime/logs/error.log`：PHP 运行时错误、Worker 引导失败与 `error_log()` 兜底日志（由 `server\HttpServer::$errorLogFile` 控制；设为 `''` 沿用 PHP 默认设置）。
+- **协程队列**：直接运行 `php yii queue/listen` 或 `php yii queue/run`，`queue\RedisCommand` 自动进入 Swoole 协程环境，按 `concurrency` 并发消费；过期/延迟任务通过 Redis Lua 原子迁移，每个 Job 在独立子协程中执行并在结束时自动归还 DB/Redis 连接。
 
 ## 6. 性能与稳定性推荐参数
 
@@ -110,22 +110,22 @@ php yii swoole/stop
 | **单 Worker 容器需要零断连热重载/内存换血** | `mode => SWOOLE_PROCESS`、`workers => 1`、`maxMemoryMb => 256` | 单 Worker 的 `SWOOLE_BASE` 无 Manager 进程，无法 `reload()` 或重启 Worker；单 Worker 需要热重载或自动换血时应显式选择 `SWOOLE_PROCESS`。 |
 | **系统与 Swoole 网络调优** | `settings => ['backlog' => 2048, 'open_tcp_nodelay' => true, 'buffer_output_size' => 4 * 1024 * 1024]` + `php -d memory_limit=512M -d opcache.enable_cli=1` | 内存上限与 OPcache 通过 PHP CLI 参数或 `php.ini` 显式控制，无隐藏 `ini_set` 覆盖。 |
 
-## 7. 开发期 Debug Toolbar（`Debug\Module` 与 `SwoolePanel`）
+## 7. 开发期 Debug Toolbar（`debug\Module` 与 `SwoolePanel`）
 
-原生 `yiisoft/yii2-debug` 依赖单请求进程假设（共享 `LogTarget`、`Panel` 缓存、`YII_BEGIN_TIME`、`$_GET`/`$_SESSION`/`headers_list()` 及修改全局日志开关），不能直接用于常驻 Swoole Worker。开发环境请显式配置协程安全版 `Dacheng\Yii2\Swoole\Debug\Module`：
+原生 `yiisoft/yii2-debug` 依赖单请求进程假设（共享 `LogTarget`、`Panel` 缓存、`YII_BEGIN_TIME`、`$_GET`/`$_SESSION`/`headers_list()` 及修改全局日志开关），不能直接用于常驻 Swoole Worker。开发环境请显式配置协程安全版 `yii2swoole\debug\Module`：
 
 ```php
-use Dacheng\Yii2\Swoole\Debug;
+use yii2swoole\debug;
 
 if (YII_ENV_DEV && class_exists(\yii\debug\Module::class)) {
     $config['bootstrap'][] = 'debug';
     $config['modules']['debug'] = [
-        'class' => Debug\Module::class,
+        'class' => debug\Module::class,
         'allowedIPs' => ['127.0.0.1', '::1'],
     ];
 }
 ```
 
-- 保持 `Server\HttpServer::$documentRoot` 指向 `@app/web`（或由反向代理提供 `/assets` 静态文件），以确保调试详情页 CSS/JS 正常加载。
+- 保持 `server\HttpServer::$documentRoot` 指向 `@app/web`（或由反向代理提供 `/assets` 静态文件），以确保调试详情页 CSS/JS 正常加载。
 - 默认内置 **`SwoolePanel`**，展示当前请求的 Worker/CID、内存增量、连接池水位与借还轨迹、`Concurrent::run()` 并发批次、Redis 命令与 Session 写回模式、异步日志队列及 `Coroutine::stats()` / `Server::stats()`；并发子协程内的日志与 SQL/HTTP Profiling 会自动归并到主请求面板与 Timeline 瀑布图。
-- 生产环境切勿启用 `Debug\Module`（未启用时 `Coroutine\Telemetry` 处于关闭态，对连接池、Redis、Session 与并发组件零额外分配）。
+- 生产环境切勿启用 `debug\Module`（未启用时 `coroutine\Telemetry` 处于关闭态，对连接池、Redis、Session 与并发组件零额外分配）。

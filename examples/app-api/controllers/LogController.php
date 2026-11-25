@@ -2,7 +2,7 @@
 
 namespace app\controllers;
 
-use Dacheng\Yii2\Swoole\Coroutine\Concurrent;
+use yii2swoole\coroutine\Concurrent;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
@@ -180,7 +180,7 @@ class LogController extends Controller
         $targets = Yii::$app->log->targets ?? [];
         
         foreach ($targets as $target) {
-            if ($target instanceof \Dacheng\Yii2\Swoole\Log\FileTarget) {
+            if ($target instanceof \yii2swoole\log\FileTarget) {
                 $logTarget = $target;
                 break;
             }

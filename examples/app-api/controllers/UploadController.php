@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\models\UploadForm;
-use Dacheng\Yii2\Swoole\Web\UploadedFile;
+use yii2swoole\web\UploadedFile;
 use Swoole\Coroutine;
 use Yii;
 use yii\helpers\FileHelper;
@@ -16,7 +16,7 @@ use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 /**
- * Demonstrates coroutine-safe file upload & download using Dacheng\Yii2\Swoole\Web\UploadedFile.
+ * Demonstrates coroutine-safe file upload & download using yii2swoole\web\UploadedFile.
  */
 class UploadController extends Controller
 {
