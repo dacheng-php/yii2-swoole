@@ -18,6 +18,7 @@ Yii2-Swoole 不隐藏配置改写、不替换 `yii` 入口脚本。所有协程�
      - `yii\httpclient\Client` → `Dacheng\Yii2\Swoole\HttpClient\Client`
      - `yii\queue\redis\Queue` → `Dacheng\Yii2\Swoole\Queue\RedisQueue`
      - `yii\log\FileTarget` → `Dacheng\Yii2\Swoole\Log\FileTarget`
+     - `yii\debug\Module` → `Dacheng\Yii2\Swoole\Debug\Module`（仅开发环境启用，内置 `SwoolePanel`）
 2. **适配 `config/console.php`**：
    - 显式在 `controllerMap` 注册 `'swoole' => Console\SwooleController::class`。
    - 显式在 `components` 注册 `'swooleHttpServer' => ['class' => Server\HttpServer::class, 'webConfig' => __DIR__ . '/web.php', ...]`。
@@ -108,3 +109,23 @@ php yii swoole/stop
 | **高吞吐多核 API（推荐默认）** | `mode => SWOOLE_BASE`、`workers => swoole_cpu_num()`（至少 2）、`maxRequest => 0`、`maxMemoryMb => 256`、`opcache.enable_cli=1` | `SWOOLE_BASE` 多 Worker 零 IPC 拷贝且有 Manager 支持 `reload` 与内存水位自动换血；关闭按请求数盲目重启避免无谓抖动。 |
 | **单 Worker 容器需要零断连热重载/内存换血** | `mode => SWOOLE_PROCESS`、`workers => 1`、`maxMemoryMb => 256` | 单 Worker 的 `SWOOLE_BASE` 无 Manager 进程，无法 `reload()` 或重启 Worker；单 Worker 需要热重载或自动换血时应显式选择 `SWOOLE_PROCESS`。 |
 | **系统与 Swoole 网络调优** | `settings => ['backlog' => 2048, 'open_tcp_nodelay' => true, 'buffer_output_size' => 4 * 1024 * 1024]` + `php -d memory_limit=512M -d opcache.enable_cli=1` | 内存上限与 OPcache 通过 PHP CLI 参数或 `php.ini` 显式控制，无隐藏 `ini_set` 覆盖。 |
+
+## 7. 开发期 Debug Toolbar（`Debug\Module` 与 `SwoolePanel`）
+
+原生 `yiisoft/yii2-debug` 依赖单请求进程假设（共享 `LogTarget`、`Panel` 缓存、`YII_BEGIN_TIME`、`$_GET`/`$_SESSION`/`headers_list()` 及修改全局日志开关），不能直接用于常驻 Swoole Worker。开发环境请显式配置协程安全版 `Dacheng\Yii2\Swoole\Debug\Module`：
+
+```php
+use Dacheng\Yii2\Swoole\Debug;
+
+if (YII_ENV_DEV && class_exists(\yii\debug\Module::class)) {
+    $config['bootstrap'][] = 'debug';
+    $config['modules']['debug'] = [
+        'class' => Debug\Module::class,
+        'allowedIPs' => ['127.0.0.1', '::1'],
+    ];
+}
+```
+
+- 保持 `Server\HttpServer::$documentRoot` 指向 `@app/web`（或由反向代理提供 `/assets` 静态文件），以确保调试详情页 CSS/JS 正常加载。
+- 默认内置 **`SwoolePanel`**，展示当前请求的 Worker/CID、内存增量、连接池水位与借还轨迹、`Concurrent::run()` 并发批次、Redis 命令与 Session 写回模式、异步日志队列及 `Coroutine::stats()` / `Server::stats()`；并发子协程内的日志与 SQL/HTTP Profiling 会自动归并到主请求面板与 Timeline 瀑布图。
+- 生产环境切勿启用 `Debug\Module`（未启用时 `Coroutine\Telemetry` 处于关闭态，对连接池、Redis、Session 与并发组件零额外分配）。

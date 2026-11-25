@@ -165,6 +165,7 @@ php yii swoole/stop     # 优雅停机（SIGTERM，等待在途请求与资源�
 | `yii\httpclient\Client` | `Dacheng\Yii2\Swoole\HttpClient\Client` | 非阻塞协程 HTTP 客户端（支持批量并发） |
 | `yii\queue\redis\Queue` | `Dacheng\Yii2\Swoole\Queue\RedisQueue` | 协程并发 Redis 队列（`php yii queue/listen`） |
 | `yii\log\FileTarget` | `Dacheng\Yii2\Swoole\Log\FileTarget` | 异步批量落盘与多 Worker 安全轮转 |
+| `yii\debug\Module` | `Dacheng\Yii2\Swoole\Debug\Module` | 协程安全 Yii2 Debug Toolbar 与内置 `SwoolePanel`（仅开发环境） |
 
 ## 常用能力速览
 

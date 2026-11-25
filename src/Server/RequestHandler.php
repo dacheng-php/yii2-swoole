@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Dacheng\Yii2\Swoole\Server;
 
 use Dacheng\Yii2\Swoole\Coroutine\Container;
+use Dacheng\Yii2\Swoole\Coroutine\Telemetry;
 use Dacheng\Yii2\Swoole\Log\CoroutineTargetInterface;
 use Dacheng\Yii2\Swoole\Log\Logger;
 use Dacheng\Yii2\Swoole\Pool\PoolAwareInterface;
@@ -142,6 +143,9 @@ final class RequestHandler
         if ($this->sendRequestIdHeader) {
             $swooleResponse->header('X-Request-Id', $context->getRequestId());
         }
+        if (Telemetry::isEnabled()) {
+            Telemetry::beginRequest($context->startedAt, $context->getRequestId());
+        }
 
         $initialObLevel = ob_get_level();
 
@@ -248,7 +252,7 @@ final class RequestHandler
     {
         $this->discardLeakedOutputBuffers($initialObLevel);
 
-        if (Logger::hasCoroutineActivity()) {
+        if (Logger::hasCoroutineActivity() || Telemetry::isEnabled()) {
             try {
                 $this->flushCoroutineLogger($app);
             } catch (Throwable $e) {
@@ -258,6 +262,7 @@ final class RequestHandler
 
         $app->clearCoroutineContext();
         UploadedFile::reset();
+        Telemetry::clear();
         RequestContext::clear();
     }
 

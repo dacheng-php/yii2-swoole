@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Log;
 
+use Dacheng\Yii2\Swoole\Coroutine\Telemetry;
 use Swoole\Coroutine;
 use yii\log\Dispatcher;
 use yii\log\Logger as BaseLogger;
@@ -164,6 +165,61 @@ class Logger extends BaseLogger
         }
 
         return array_values($timings);
+    }
+
+    public function getElapsedTime()
+    {
+        if ($this->isCoroutineContext()) {
+            $startedAt = Telemetry::getRequestStartedAt();
+            if ($startedAt !== null) {
+                return max(0.0, microtime(true) - $startedAt);
+            }
+        }
+
+        return parent::getElapsedTime();
+    }
+
+    /**
+     * Merges buffered coroutine log/profiling messages from the current child coroutine into a
+     * parent coroutine so concurrent sub-tasks (e.g. Concurrent::run / HttpClient::batchSend)
+     * appear in the parent request's logs, DB queries, and Timeline waterfall.
+     */
+    public static function mergeCoroutineMessagesIntoParent(int $parentCid): void
+    {
+        if (!extension_loaded('swoole') || $parentCid < 0 || Coroutine::getCid() < 0) {
+            return;
+        }
+
+        if (!Coroutine::exists($parentCid)) {
+            return;
+        }
+
+        $childContext = Coroutine::getContext();
+        $childMessages = $childContext[self::CONTEXT_MESSAGES_KEY] ?? null;
+        if (!is_array($childMessages) || $childMessages === []) {
+            return;
+        }
+
+        $parentContext = Coroutine::getContext($parentCid);
+        if ($parentContext === null) {
+            return;
+        }
+
+        $parentMessages = $parentContext[self::CONTEXT_MESSAGES_KEY] ?? [];
+        if (!is_array($parentMessages)) {
+            $parentMessages = [];
+        }
+
+        // Append as sequential list entries so paired begin/end profiling records from the same
+        // child coroutine remain contiguous and never overwrite identical tokens from sibling tasks.
+        foreach ($childMessages as $message) {
+            $parentMessages[] = $message;
+        }
+
+        $parentContext[self::CONTEXT_MESSAGES_KEY] = $parentMessages;
+        $parentContext[self::CONTEXT_DIRTY_KEY] = true;
+
+        unset($childContext[self::CONTEXT_MESSAGES_KEY], $childContext[self::CONTEXT_DIRTY_KEY]);
     }
 
     public static function clearCoroutineMessages(): void

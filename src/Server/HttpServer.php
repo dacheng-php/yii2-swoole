@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Server;
 
+use Dacheng\Yii2\Swoole\Coroutine\Telemetry;
 use Dacheng\Yii2\Swoole\Pool\PoolRegistry;
 use Swoole\Http\Request as SwooleRequest;
 use Swoole\Http\Response as SwooleResponse;
@@ -244,7 +245,7 @@ class HttpServer extends Component
             ));
         });
 
-        $server->on('WorkerStart', function (SwooleHttpServer $srv, int $workerId) use (&$handler, &$reapTimerId, &$memoryWarned): void {
+        $server->on('WorkerStart', function (SwooleHttpServer $srv, int $workerId) use (&$handler, &$reapTimerId, &$memoryWarned, $effectiveMode, $workerNum): void {
             $this->configureErrorLog();
 
             if (function_exists('opcache_reset') && $this->watch) {
@@ -259,7 +260,16 @@ class HttpServer extends Component
 
             try {
                 $handler->bootstrap();
-                RuntimeStats::bind($srv, $handler, $workerId);
+                RuntimeStats::bind($srv, $handler, $workerId, [
+                    'mode' => $effectiveMode === SWOOLE_PROCESS ? 'SWOOLE_PROCESS' : 'SWOOLE_BASE',
+                    'workers' => $workerNum,
+                    'hook_flags' => $this->hookFlags,
+                    'max_coroutine' => $this->maxCoroutine,
+                    'max_memory_mb' => $this->maxMemoryMb,
+                    'max_request' => $this->maxRequest,
+                    'watch' => $this->watch,
+                ]);
+                Telemetry::registerRuntimeSnapshotProvider(static fn (): array => RuntimeStats::snapshot());
 
                 $maintenanceInterval = $this->poolReapInterval > 0
                     ? $this->poolReapInterval
@@ -349,6 +359,7 @@ class HttpServer extends Component
                 $handler->shutdown();
             }
 
+            Telemetry::registerRuntimeSnapshotProvider(null);
             RuntimeStats::reset();
             $this->trigger(self::EVENT_WORKER_STOP);
         });

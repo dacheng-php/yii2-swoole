@@ -37,6 +37,7 @@
   },
   "suggest": {
     "ext-pdo": "Required to use Dacheng\\Yii2\\Swoole\\Db\\Connection pooled database component.",
+    "yiisoft/yii2-debug": "Required to use the coroutine-safe Swoole Debug Toolbar and SwoolePanel.",
     "yiisoft/yii2-httpclient": "Required to use coroutine non-blocking HttpClient.",
     "yiisoft/yii2-queue": "Required to use coroutine RedisQueue workers.",
     "yiisoft/yii2-redis": "Required to use coroutine Redis connection pool, cache, and session."

@@ -22,12 +22,19 @@ final class RuntimeStats
 
     private static float $workerStartedAt = 0.0;
 
-    public static function bind(SwooleHttpServer $server, RequestHandler $handler, int $workerId): void
+    /** @var array<string, mixed> */
+    private static array $serverMeta = [];
+
+    /**
+     * @param array<string, mixed> $meta
+     */
+    public static function bind(SwooleHttpServer $server, RequestHandler $handler, int $workerId, array $meta = []): void
     {
         self::$server = $server;
         self::$handler = $handler;
         self::$workerId = $workerId;
         self::$workerStartedAt = microtime(true);
+        self::$serverMeta = $meta;
     }
 
     public static function reset(): void
@@ -36,6 +43,7 @@ final class RuntimeStats
         self::$handler = null;
         self::$workerId = null;
         self::$workerStartedAt = 0.0;
+        self::$serverMeta = [];
     }
 
     /**
@@ -48,6 +56,7 @@ final class RuntimeStats
         return [
             'php_version' => PHP_VERSION,
             'swoole_version' => extension_loaded('swoole') ? phpversion('swoole') : null,
+            'config' => self::$serverMeta,
             'worker' => [
                 'id' => self::$workerId,
                 'pid' => getmypid(),

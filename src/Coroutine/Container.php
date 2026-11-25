@@ -86,6 +86,17 @@ class Container extends BaseContainer
         parent::clear($class);
     }
 
+    public function getCoroutineSingletonCount(): int
+    {
+        if ($this->coroutineSingletons === [] || !$this->isCoroutineContext()) {
+            return 0;
+        }
+
+        $store = Coroutine::getContext()[self::CONTEXT_SINGLETONS_KEY] ?? null;
+
+        return is_array($store) ? count($store) : 0;
+    }
+
     public function clearCoroutineSingletons(): void
     {
         if ($this->coroutineSingletons === [] || !$this->isCoroutineContext()) {

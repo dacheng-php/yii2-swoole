@@ -6,6 +6,7 @@ namespace Dacheng\Yii2\Swoole\Redis;
 
 use ArrayIterator;
 use Dacheng\Yii2\Swoole\Coroutine\ResettableInterface;
+use Dacheng\Yii2\Swoole\Coroutine\Telemetry;
 use Swoole\Coroutine;
 use Throwable;
 use Yii;
@@ -127,14 +128,20 @@ class Session extends BaseSession implements ResettableInterface
 
         $this->active = false;
 
+        $mode = 'noop';
+        $wasDirty = $this->dirty;
+        $keyCount = count($this->sessionData);
+
         if ($this->sessionId !== null) {
             if (!$this->writeOnlyWhenDirty || $this->dirty) {
+                $mode = 'write';
                 try {
                     $this->writeSession($this->sessionId, $this->encodeSessionData());
                 } catch (Throwable $e) {
                     Yii::error('Failed to save session: ' . $e->getMessage(), __METHOD__);
                 }
             } elseif ($this->touchTtlOnRead && $this->hasSessionIdFlag && $this->sessionData !== []) {
+                $mode = 'expire';
                 try {
                     $this->redis->executeCommand('EXPIRE', [
                         $this->calculateKey($this->sessionId),
@@ -144,6 +151,10 @@ class Session extends BaseSession implements ResettableInterface
                     Yii::warning('Failed to refresh session TTL: ' . $e->getMessage(), __METHOD__);
                 }
             }
+        }
+
+        if (Telemetry::isEnabled()) {
+            Telemetry::recordSessionActivity($mode, $this->sessionId, $wasDirty, $keyCount);
         }
 
         $this->sessionData = [];
@@ -157,12 +168,17 @@ class Session extends BaseSession implements ResettableInterface
             return;
         }
 
+        $destroyedId = $this->sessionId;
         if ($this->sessionId !== null) {
             try {
                 $this->destroySession($this->sessionId);
             } catch (Throwable $e) {
                 Yii::error('Failed to destroy session: ' . $e->getMessage(), __METHOD__);
             }
+        }
+
+        if (Telemetry::isEnabled()) {
+            Telemetry::recordSessionActivity('destroy', $destroyedId, true, 0);
         }
 
         $this->sessionData = [];
@@ -221,6 +237,50 @@ class Session extends BaseSession implements ResettableInterface
     public function getIsActive(): bool
     {
         return $this->active;
+    }
+
+    /**
+     * Returns an immutable snapshot of the current coroutine's in-memory session payload
+     * without triggering open().
+     *
+     * @return array<string, mixed>
+     */
+    public function getSessionData(): array
+    {
+        return $this->sessionData;
+    }
+
+    /**
+     * Returns lightweight read-only metadata for SwoolePanel inspection before session close().
+     *
+     * @return array{mode:string,session_id_masked:?string,dirty:bool,key_count:int}
+     */
+    public function getDebugInfo(): array
+    {
+        $maskedId = null;
+        if ($this->sessionId !== null && $this->sessionId !== '') {
+            $maskedId = strlen($this->sessionId) > 8
+                ? substr($this->sessionId, 0, 4) . '…' . substr($this->sessionId, -4)
+                : $this->sessionId;
+        }
+
+        $mode = 'inactive';
+        if ($this->active) {
+            if (!$this->writeOnlyWhenDirty || $this->dirty) {
+                $mode = 'write (pending close)';
+            } elseif ($this->touchTtlOnRead && $this->hasSessionIdFlag && $this->sessionData !== []) {
+                $mode = 'expire (pending close)';
+            } else {
+                $mode = 'noop (pending close)';
+            }
+        }
+
+        return [
+            'mode' => $mode,
+            'session_id_masked' => $maskedId,
+            'dirty' => $this->dirty,
+            'key_count' => count($this->sessionData),
+        ];
     }
 
     public function getId(): string

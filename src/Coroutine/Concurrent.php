@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Coroutine;
 
+use Dacheng\Yii2\Swoole\Log\Logger;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Channel;
 use Swoole\Coroutine\WaitGroup;
@@ -77,6 +78,8 @@ final class Concurrent
         }
 
         $parentCid = Coroutine::getCid();
+        $telemetryEnabled = Telemetry::isEnabled();
+        $batchStart = $telemetryEnabled ? microtime(true) : 0.0;
         $outcomes = [];
         // Pre-populate keys to preserve original iteration order
         foreach (array_keys($tasks) as $key) {
@@ -92,11 +95,14 @@ final class Concurrent
             }
 
             $wg->add();
-            Coroutine::create(static function () use ($key, $task, $wg, $semaphore, $parentCid, $propagateContextKeys, &$outcomes): void {
+            Coroutine::create(static function () use ($key, $task, $wg, $semaphore, $parentCid, $propagateContextKeys, $telemetryEnabled, &$outcomes): void {
                 // Register completion defer FIRST so LIFO execution guarantees all task-registered
                 // Coroutine::defer() callbacks (e.g. DB/Redis pool returns) run BEFORE releasing
                 // the semaphore and unblocking the parent WaitGroup.
-                Coroutine::defer(static function () use ($wg, $semaphore): void {
+                Coroutine::defer(static function () use ($wg, $semaphore, $parentCid, $telemetryEnabled): void {
+                    if ($telemetryEnabled) {
+                        Logger::mergeCoroutineMessagesIntoParent($parentCid);
+                    }
                     if ($semaphore !== null) {
                         $semaphore->pop();
                     }
@@ -104,6 +110,9 @@ final class Concurrent
                 });
 
                 try {
+                    if ($telemetryEnabled) {
+                        Telemetry::attachParent($parentCid);
+                    }
                     if ($propagateContextKeys !== []) {
                         Context::copyFrom($parentCid, $propagateContextKeys);
                     }
@@ -118,6 +127,10 @@ final class Concurrent
 
         if ($semaphore !== null) {
             $semaphore->close();
+        }
+
+        if ($telemetryEnabled) {
+            Telemetry::recordConcurrentBatch(count($tasks), $concurrency, (microtime(true) - $batchStart) * 1000.0);
         }
 
         return $outcomes;

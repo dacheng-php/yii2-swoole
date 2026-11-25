@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Server;
 
-use Dacheng\Yii2\Swoole\{Db, HttpClient, Log, Queue, Redis, Web};
+use Dacheng\Yii2\Swoole\{Db, Debug, HttpClient, Log, Queue, Redis, Web};
 use Throwable;
 
 /**
@@ -178,6 +178,52 @@ final class ConfigValidator
             $results[] = is_dir($server->documentRoot)
                 ? $this->ok('server.documentRoot', "Static documentRoot ready: {$server->documentRoot}")
                 : $this->warn('server.documentRoot', "Configured documentRoot does not exist: {$server->documentRoot}");
+        }
+
+        // 9. Debug module audit (if configured)
+        $modules = $config['modules'] ?? [];
+        if (is_array($modules) && isset($modules['debug'])) {
+            $debugDef = $modules['debug'];
+            $debugClass = is_array($debugDef)
+                ? ($debugDef['class'] ?? null)
+                : (is_string($debugDef) ? $debugDef : (is_object($debugDef) ? get_class($debugDef) : null));
+
+            if ($debugClass === 'yii\debug\Module' || $debugClass === '\yii\debug\Module') {
+                $results[] = $this->error(
+                    'modules.debug',
+                    sprintf(
+                        'Standard yii\\debug\\Module is unsafe in resident Swoole workers. Use %s instead.',
+                        Debug\Module::class
+                    )
+                );
+            } elseif (is_string($debugClass) && is_a($debugClass, Debug\Module::class, true)) {
+                $results[] = $this->ok('modules.debug', "Debug toolbar uses coroutine-safe {$debugClass}");
+
+                if (is_array($debugDef) && isset($debugDef['logTarget'])) {
+                    $lt = $debugDef['logTarget'];
+                    $ltClass = is_array($lt) ? ($lt['class'] ?? Debug\LogTarget::class) : (is_string($lt) ? $lt : (is_object($lt) ? get_class($lt) : null));
+                    if (!is_string($ltClass) || !is_a($ltClass, Log\CoroutineTargetInterface::class, true)) {
+                        $results[] = $this->error(
+                            'modules.debug.logTarget',
+                            sprintf('Debug logTarget "%s" must implement %s.', (string) $ltClass, Log\CoroutineTargetInterface::class)
+                        );
+                    }
+                }
+
+                if (defined('YII_ENV_PROD') && YII_ENV_PROD) {
+                    $results[] = $this->warn(
+                        'modules.debug.env',
+                        'Debug module is enabled while YII_ENV_PROD is true; disable it in production for security and performance.'
+                    );
+                }
+
+                if ($server->documentRoot === null) {
+                    $results[] = $this->warn(
+                        'modules.debug.assets',
+                        'Debug module is enabled without server.documentRoot; ensure /assets static files are served by Swoole or a reverse proxy.'
+                    );
+                }
+            }
         }
 
         return $results;

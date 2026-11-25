@@ -30,13 +30,13 @@ Yii2-Swoole 的设计遵循三条互不妥协的原则：
    - **进程拓扑铁律**：`SWOOLE_BASE` 在 `workers = 1` 时运行在单进程模式（无 Manager 进程），不支持 `reload()` 与自动拉起退出的 Worker；需要零停机重载或单 Worker 内存自动回收时，使用 `workers >= 2` 或 `SWOOLE_PROCESS`（`--watch` 单 Worker 开发模式会显式提示并切换为 `SWOOLE_PROCESS`）。
    - **优雅退出铁律**：`reload_async` 启用后，Worker 退出需等待所有协程与定时器清空；`onWorkerExit` 必须立即清理维护 Timer 并停止 `Log\LogWorker`，同时保持连接池开启直至所有在途请求完成，最后在 `onWorkerStop` 统一关闭连接池。
 
-## 3. 10 包扁平分层架构（单向依赖）
+## 3. 11 包扁平分层架构（单向依赖）
 
 ```text
 Console\    : SwooleController (CLI 运维入口，隔离 yii\console 依赖)
 Server\     : HttpServer, RequestHandler, ProcessManager, FileWatcher, ConfigValidator, RuntimeStats
 Web\        : Application, Request, Response, UploadedFile, ErrorHandler, User, RequestContext
-Coroutine\  : Concurrent, Context, Container, ResettableInterface
+Coroutine\  : Concurrent, Context, Container, ResettableInterface, Telemetry
 Pool\       : ConnectionPool (LIFO), PoolConfig, PooledConnection, PoolAwareInterface, PoolRegistry,
               PoolException, PoolClosedException, PoolCreationException, PoolExhaustedException
 Db\         : Connection, Command
@@ -44,9 +44,11 @@ Redis\      : Connection, Cache, Session
 Log\        : Logger, FileTarget, CoroutineTargetInterface, LogWorker, LogFileRotator
 HttpClient\ : Client, Transport
 Queue\      : RedisQueue, RedisCommand, RedisStatisticsProvider, Loop
+Debug\      : Module, LogTarget, Controllers\DefaultController, Controllers\UserController,
+              Actions\ExplainAction, Panels\{Request,Profiling,Timeline,Db,Event,Mail,User,Swoole}Panel
 ```
 
-依赖方向严格单向：`Console\` → `Server\` → `Web\` / `Coroutine\` / `Pool\` / `Db\` / `Redis\` / `Log\` / `HttpClient\` / `Queue\`；`Web\` 不反向依赖 `Server\`。
+依赖方向严格单向：`Console\` → `Server\` → `Web\` / `Coroutine\` / `Pool\` / `Db\` / `Redis\` / `Log\` / `HttpClient\` / `Queue\` / `Debug\`；组件层不反向依赖 `Server\`（`RuntimeStats` 通过 `Coroutine\Telemetry` 注册快照回调桥接给 `Debug\Panels\SwoolePanel`）。
 
 ## 4. 核心机制说明
 

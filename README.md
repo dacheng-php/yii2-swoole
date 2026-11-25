@@ -165,6 +165,7 @@ php yii swoole/stop     # Graceful shutdown (SIGTERM, drains active requests & p
 | `yii\httpclient\Client` | `Dacheng\Yii2\Swoole\HttpClient\Client` | Non-blocking coroutine HTTP client with parallel batch requests |
 | `yii\queue\redis\Queue` | `Dacheng\Yii2\Swoole\Queue\RedisQueue` | Concurrent coroutine Redis queue (`php yii queue/listen`) |
 | `yii\log\FileTarget` | `Dacheng\Yii2\Swoole\Log\FileTarget` | Buffered async file logging with multi-worker lock-safe rotation |
+| `yii\debug\Module` | `Dacheng\Yii2\Swoole\Debug\Module` | Coroutine-safe Yii2 Debug Toolbar with built-in `SwoolePanel` (dev only) |
 
 ## Usage Highlights
 

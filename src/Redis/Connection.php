@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Redis;
 
+use Dacheng\Yii2\Swoole\Coroutine\Telemetry;
 use Dacheng\Yii2\Swoole\Pool\ConnectionPool;
 use Dacheng\Yii2\Swoole\Pool\PoolAwareInterface;
 use Dacheng\Yii2\Swoole\Pool\PoolConfig;
@@ -132,6 +133,16 @@ class Connection extends BaseRedisConnection implements PoolAwareInterface
         $frame = $this->encodeCommand($commandName, $params);
         Yii::debug("Executing Redis Command: {$commandName}", __METHOD__);
 
+        $telemetry = Telemetry::isEnabled();
+        $profileToken = $telemetry ? $this->formatProfileToken($commandName, $params) : '';
+        $cmdStart = $telemetry ? microtime(true) : 0.0;
+        $retryAttempts = 0;
+        $failed = false;
+
+        if ($telemetry) {
+            Yii::beginProfile($profileToken, __METHOD__);
+        }
+
         // Only retry non-sticky commands on socket failure using a local counter (no shared $this->retries mutation)
         $remainingRetries = (!$state['sticky'] && !$isStickyStart && !$isStickyEnd && $this->retries > 0)
             ? (int) $this->retries
@@ -153,17 +164,33 @@ class Connection extends BaseRedisConnection implements PoolAwareInterface
                     $this->releasePooledSocket();
 
                     if ($remainingRetries <= 0) {
+                        $failed = true;
                         throw $e;
                     }
 
                     $remainingRetries--;
+                    $retryAttempts++;
                     Yii::warning("Retrying Redis command '{$commandName}' after socket error: {$e->getMessage()}", __METHOD__);
                     if ($this->retryInterval > 0) {
                         Coroutine::sleep($this->retryInterval / 1_000_000);
                     }
+                } catch (Throwable $e) {
+                    $failed = true;
+                    throw $e;
                 }
             }
         } finally {
+            if ($telemetry) {
+                Yii::endProfile($profileToken, __METHOD__);
+                Telemetry::recordRedisCommand(
+                    $profileToken,
+                    (microtime(true) - $cmdStart) * 1000.0,
+                    (bool) $state['sticky'],
+                    $retryAttempts,
+                    $failed
+                );
+            }
+
             $state = $this->getState();
             if ($isStickyEnd && $state['sticky']) {
                 $state['sticky'] = false;
@@ -582,6 +609,38 @@ class Connection extends BaseRedisConnection implements PoolAwareInterface
         $states = $context[self::CONTEXT_STATE_KEY] ?? [];
         $states[spl_object_id($this)] = $state;
         $context[self::CONTEXT_STATE_KEY] = $states;
+    }
+
+    /**
+     * Formats a concise, redacted profiling token for Redis telemetry & Yii2 ProfilingPanel.
+     *
+     * @param array<int, mixed> $params
+     */
+    private function formatProfileToken(string $commandName, array $params): string
+    {
+        if ($commandName === 'AUTH' || str_starts_with($commandName, 'AUTH ')) {
+            return 'AUTH ****';
+        }
+
+        if ($params === []) {
+            return $commandName;
+        }
+
+        $parts = [$commandName];
+        $limit = min(count($params), 4);
+        for ($i = 0; $i < $limit; $i++) {
+            $arg = is_scalar($params[$i]) ? (string) $params[$i] : gettype($params[$i]);
+            if (strlen($arg) > 64) {
+                $arg = substr($arg, 0, 61) . '...';
+            }
+            $parts[] = $arg;
+        }
+
+        if (count($params) > $limit) {
+            $parts[] = sprintf('(+%d args)', count($params) - $limit);
+        }
+
+        return implode(' ', $parts);
     }
 
     /**

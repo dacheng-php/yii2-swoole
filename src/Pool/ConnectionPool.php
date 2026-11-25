@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Dacheng\Yii2\Swoole\Pool;
 
 use Closure;
+use Dacheng\Yii2\Swoole\Coroutine\Telemetry;
 use Swoole\Coroutine;
 use Swoole\Coroutine\Channel;
 use Swoole\Coroutine\WaitGroup;
@@ -160,6 +161,9 @@ final class ConnectionPool
             throw new PoolClosedException($this->name);
         }
 
+        $telemetry = Telemetry::isEnabled();
+        $acquireStart = $telemetry ? microtime(true) : 0.0;
+        $pinged = false;
         $deadline = null;
 
         while (true) {
@@ -174,12 +178,19 @@ final class ConnectionPool
                     continue;
                 }
 
-                if ($this->isHealthy($item)) {
+                $checkedPing = false;
+                if ($this->isHealthy($item, $checkedPing)) {
+                    if ($checkedPing) {
+                        $pinged = true;
+                    }
                     if ($this->closed) {
                         $this->destroySlot($item);
                         throw new PoolClosedException($this->name);
                     }
                     $this->inUseCount++;
+                    if ($telemetry) {
+                        Telemetry::recordPoolAcquire($this->name, (microtime(true) - $acquireStart) * 1000.0, false, $pinged);
+                    }
                     return $item;
                 }
 
@@ -207,17 +218,26 @@ final class ConnectionPool
                 }
 
                 $this->inUseCount++;
+                if ($telemetry) {
+                    Telemetry::recordPoolAcquire($this->name, (microtime(true) - $acquireStart) * 1000.0, true, $pinged);
+                }
                 return $created;
             }
 
             // 3. Saturated path: wait for a release/discard wakeup until waitTimeout expires.
             if (Coroutine::getCid() < 0) {
+                if ($telemetry) {
+                    Telemetry::recordPoolAcquire($this->name, (microtime(true) - $acquireStart) * 1000.0, false, $pinged, true);
+                }
                 throw new PoolExhaustedException($this->name, $this->config->waitTimeout, $this->getStats());
             }
 
             $deadline ??= microtime(true) + $this->config->waitTimeout;
             $remaining = $deadline - microtime(true);
             if ($remaining <= 0) {
+                if ($telemetry) {
+                    Telemetry::recordPoolAcquire($this->name, (microtime(true) - $acquireStart) * 1000.0, false, $pinged, true);
+                }
                 throw new PoolExhaustedException($this->name, $this->config->waitTimeout, $this->getStats());
             }
 
@@ -239,6 +259,9 @@ final class ConnectionPool
                     }
                 }
 
+                if ($telemetry) {
+                    Telemetry::recordPoolAcquire($this->name, (microtime(true) - $acquireStart) * 1000.0, false, $pinged, true);
+                }
                 throw new PoolExhaustedException($this->name, $this->config->waitTimeout, $this->getStats());
             }
         }
@@ -255,6 +278,9 @@ final class ConnectionPool
         }
 
         $this->inUseCount = max(0, $this->inUseCount - 1);
+        if (Telemetry::isEnabled()) {
+            Telemetry::recordPoolRelease($this->name, false);
+        }
 
         if ($this->closed) {
             $this->destroySlot($item);
@@ -286,6 +312,10 @@ final class ConnectionPool
 
         if ($item->isInUse()) {
             $this->inUseCount = max(0, $this->inUseCount - 1);
+        }
+
+        if (Telemetry::isEnabled()) {
+            Telemetry::recordPoolRelease($this->name, true);
         }
 
         $this->destroySlot($item);
@@ -397,7 +427,7 @@ final class ConnectionPool
         return new PooledConnection($connection, microtime(true));
     }
 
-    private function isHealthy(PooledConnection $item): bool
+    private function isHealthy(PooledConnection $item, bool &$pinged = false): bool
     {
         $now = microtime(true);
 
@@ -406,6 +436,7 @@ final class ConnectionPool
         }
 
         if ($this->pinger !== null && $item->needsHealthCheck($now, $this->config->idlePingInterval)) {
+            $pinged = true;
             try {
                 return (bool) ($this->pinger)($item->connection);
             } catch (Throwable) {

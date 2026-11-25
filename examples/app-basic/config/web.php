@@ -1,6 +1,6 @@
 <?php
 
-use Dacheng\Yii2\Swoole\{Log, Redis, Web};
+use Dacheng\Yii2\Swoole\{Debug, Log, Redis, Web};
 use yii\helpers\BaseArrayHelper;
 
 $commonConfig = require __DIR__ . '/common.php';
@@ -74,5 +74,13 @@ $config = [
     ],
     'params' => require __DIR__ . '/params.php',
 ];
+
+if (YII_ENV_DEV && class_exists(\yii\debug\Module::class)) {
+    $config['bootstrap'][] = 'debug';
+    $config['modules']['debug'] = [
+        'class' => Debug\Module::class,
+        'allowedIPs' => ['127.0.0.1', '::1'],
+    ];
+}
 
 return BaseArrayHelper::merge($commonConfig, $config);
