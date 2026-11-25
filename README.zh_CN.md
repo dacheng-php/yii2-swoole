@@ -31,7 +31,7 @@
 ## 安装
 
 ```bash
-composer require dacheng-php/yii2-swoole
+composer require yii2-swoole/yii2-swoole
 ```
 
 ## 快速上手（3 步接入）
@@ -232,7 +232,7 @@ php yii swoole/start --watch --workers=1
 
 ## 演进方向
 
-当前版本聚焦于稳定、高效地以 Swoole 6 驱动传统 Yii2 HTTP 应用及核心协程组件。在此基础上，项目依托通用协程与连接池基座，计划逐步拓展更多高性能网络与实时场景（如 **SSE、WebSocket、TCP / UDP Server、Gateway** 等），相关排期与讨论见 [GitHub Issues](https://github.com/dacheng-php/yii2-swoole/issues)。
+当前版本聚焦于稳定、高效地以 Swoole 6 驱动传统 Yii2 HTTP 应用及核心协程组件。在此基础上，项目依托通用协程与连接池基座，计划逐步拓展更多高性能网络与实时场景（如 **SSE、WebSocket、TCP / UDP Server、Gateway** 等），相关排期与讨论见 [GitHub Issues](https://github.com/yii2-swoole/yii2-swoole/issues)。
 
 ## License
 

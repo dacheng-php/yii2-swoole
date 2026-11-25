@@ -1,5 +1,5 @@
 {
-  "name": "dacheng-php/yii2-swoole",
+  "name": "yii2-swoole/yii2-swoole",
   "description": "Production-ready Swoole 6 coroutine runtime adapter and async components for Yii2.",
   "type": "yii2-extension",
   "keywords": [
@@ -10,7 +10,7 @@
     "connection-pool",
     "async"
   ],
-  "homepage": "https://github.com/dacheng-php/yii2-swoole",
+  "homepage": "https://github.com/yii2-swoole/yii2-swoole",
   "license": "MIT",
   "authors": [
     {
@@ -19,8 +19,8 @@
     }
   ],
   "support": {
-    "issues": "https://github.com/dacheng-php/yii2-swoole/issues",
-    "source": "https://github.com/dacheng-php/yii2-swoole"
+    "issues": "https://github.com/yii2-swoole/yii2-swoole/issues",
+    "source": "https://github.com/yii2-swoole/yii2-swoole"
   },
   "require": {
     "php": ">=8.1",

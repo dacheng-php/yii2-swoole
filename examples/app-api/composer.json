@@ -1,5 +1,5 @@
 {
-    "name": "dacheng-php/yii2-api",
+    "name": "yii2-swoole/yii2-api",
     "description": "Yii 2 API Project with Swoole",
     "keywords": ["yii2", "framework", "api", "swoole", "coroutine"],
     "type": "project",
@@ -9,7 +9,7 @@
     "require": {
         "php": ">=8.1",
         "ext-swoole": "^6.0",
-        "dacheng-php/yii2-swoole": "@dev",
+        "yii2-swoole/yii2-swoole": "@dev",
         "yiisoft/yii2": "~2.0.45",
         "yiisoft/yii2-httpclient": "^2.0",
         "yiisoft/yii2-queue": "^2.3.7",

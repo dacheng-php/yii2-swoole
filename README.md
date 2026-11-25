@@ -31,7 +31,7 @@ Run traditional Yii2 applications on a resident **Swoole 6** coroutine engine wi
 ## Installation
 
 ```bash
-composer require dacheng-php/yii2-swoole
+composer require yii2-swoole/yii2-swoole
 ```
 
 ## Quick Start (3 Steps)
@@ -232,7 +232,7 @@ php yii swoole/start --watch --workers=1
 
 ## Roadmap
 
-Today, Yii2-Swoole focuses on reliably running traditional Yii2 HTTP applications and coroutine components on Swoole 6. Built on its shared coroutine and connection-pool foundation, future plans include expanding into real-time and multi-protocol workloads such as **SSE, WebSocket, TCP / UDP servers, and Gateway** use cases. Track progress and discussions in [GitHub Issues](https://github.com/dacheng-php/yii2-swoole/issues).
+Today, Yii2-Swoole focuses on reliably running traditional Yii2 HTTP applications and coroutine components on Swoole 6. Built on its shared coroutine and connection-pool foundation, future plans include expanding into real-time and multi-protocol workloads such as **SSE, WebSocket, TCP / UDP servers, and Gateway** use cases. Track progress and discussions in [GitHub Issues](https://github.com/yii2-swoole/yii2-swoole/issues).
 
 ## License
 
