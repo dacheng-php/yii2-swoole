@@ -40,7 +40,7 @@ Your standard Yii2 `yii` console entry script (`new yii\console\Application($con
 
 ### 1. Adapt `config/web.php`
 
-Set the application class to `Web\Application` (`request`, `response`, `errorHandler`, `session`, and `user` default to coroutine-safe implementations automatically), and swap in pooled/coroutine components as needed:
+Set the application class to `Web\Application` (`request`, `response`, `errorHandler`, and `user` default to coroutine-safe implementations automatically; `session` defaults to `Redis\Session` when `yiisoft/yii2-redis` is installed and never falls back to native `$_SESSION`), and swap in pooled/coroutine components as needed:
 
 ```php
 <?php
@@ -156,7 +156,7 @@ php yii swoole/stop     # Graceful shutdown (SIGTERM, drains active requests & p
 
 | Standard Yii2 Component | Yii2-Swoole Equivalent | Notes |
 | --- | --- | --- |
-| `yii\web\Application` | `Dacheng\Yii2\Swoole\Web\Application` | Coroutine-isolated app facade (defaults `request`, `response`, `errorHandler`, `session`, `user`) |
+| `yii\web\Application` | `Dacheng\Yii2\Swoole\Web\Application` | Coroutine-isolated app facade (defaults `request`, `response`, `errorHandler`, `user`, plus `session` when `yiisoft/yii2-redis` is installed) |
 | `yii\web\UploadedFile` | `Dacheng\Yii2\Swoole\Web\UploadedFile` | Coroutine-safe uploads (single, multiple, and Yii2 Model `FileValidator` support) |
 | `yii\db\Connection` | `Dacheng\Yii2\Swoole\Db\Connection` | Pooled PDO connection with health checks and broken-connection discard |
 | `yii\redis\Connection` | `Dacheng\Yii2\Swoole\Redis\Connection` | Pooled coroutine Redis connection |

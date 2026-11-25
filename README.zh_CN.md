@@ -40,7 +40,7 @@ composer require dacheng-php/yii2-swoole
 
 ### 1. 适配 `config/web.php`
 
-将应用类设为 `Web\Application`（`request`、`response`、`errorHandler`、`session`、`user` 已自动默认提供协程安全实现），并按需替换数据库、Redis、缓存、日志等组件：
+将应用类设为 `Web\Application`（`request`、`response`、`errorHandler`、`user` 已自动默认提供协程安全实现；安装 `yiisoft/yii2-redis` 时 `session` 自动默认为 `Redis\Session`，未安装时不回落到不安全的原生 `$_SESSION`），并按需替换数据库、Redis、缓存、日志等组件：
 
 ```php
 <?php
@@ -156,7 +156,7 @@ php yii swoole/stop     # 优雅停机（SIGTERM，等待在途请求与资源�
 
 | Yii2 原生组件 | Yii2-Swoole 协程组件 | 说明 |
 | --- | --- | --- |
-| `yii\web\Application` | `Dacheng\Yii2\Swoole\Web\Application` | 协程隔离应用门面（默认内置协程 `request`/`response`/`errorHandler`/`session`/`user`） |
+| `yii\web\Application` | `Dacheng\Yii2\Swoole\Web\Application` | 协程隔离应用门面（默认内置协程 `request`/`response`/`errorHandler`/`user`，安装 `yiisoft/yii2-redis` 时默认内置 `session`） |
 | `yii\web\UploadedFile` | `Dacheng\Yii2\Swoole\Web\UploadedFile` | 协程安全文件上传（支持单文件、多文件与 Model 表单校验） |
 | `yii\db\Connection` | `Dacheng\Yii2\Swoole\Db\Connection` | PDO 协程连接池，自动探活与断线丢弃 |
 | `yii\redis\Connection` | `Dacheng\Yii2\Swoole\Redis\Connection` | Redis 协程连接池 |

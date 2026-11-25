@@ -193,7 +193,7 @@ class Transport extends BaseTransport
         $success = $client->execute($path);
         if (!$success || $client->statusCode < 0) {
             $errCode = $client->errCode;
-            $errMsg = $client->errMsg ?: ($errCode ? socket_strerror($errCode) : 'Unknown network error');
+            $errMsg = $client->errMsg ?: ($errCode ? swoole_strerror($errCode) : 'Unknown network error');
             throw new Exception("HTTP request failed (status={$client->statusCode}, errCode={$errCode}): {$errMsg}");
         }
 

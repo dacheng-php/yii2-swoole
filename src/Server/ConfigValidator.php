@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Dacheng\Yii2\Swoole\Server;
 
-use Dacheng\Yii2\Swoole\{Db, Debug, HttpClient, Log, Queue, Redis, Web};
+use Dacheng\Yii2\Swoole\{Coroutine, Db, Debug, HttpClient, Log, Queue, Redis, Web};
 use Throwable;
 
 /**
@@ -104,19 +104,35 @@ final class ConfigValidator
 
         if (isset($components['session'])) {
             $sessionDef = $components['session'];
-            $sessionClass = is_array($sessionDef) ? ($sessionDef['class'] ?? Redis\Session::class) : null;
-            if (!is_string($sessionClass) || !is_a($sessionClass, Redis\Session::class, true)) {
+            $hasYii2Redis = class_exists(\yii\redis\Session::class);
+            $sessionClass = is_array($sessionDef)
+                ? ($sessionDef['class'] ?? ($hasYii2Redis ? Redis\Session::class : null))
+                : (is_object($sessionDef) ? get_class($sessionDef) : (is_string($sessionDef) ? $sessionDef : null));
+
+            if ($sessionClass === null) {
                 $results[] = $this->error(
                     'components.session',
-                    sprintf('Session component uses "%s"; native PHP $_SESSION is unsafe under concurrency. Set "class" => %s.', (string) ($sessionClass ?? 'unknown'), Redis\Session::class)
+                    'Session component is configured without "class" and "yiisoft/yii2-redis" is not installed. Install "yiisoft/yii2-redis" or explicitly set a coroutine-safe "class".'
                 );
-            } else {
+            } elseif ($sessionClass === Redis\Session::class && !$hasYii2Redis) {
+                $results[] = $this->error(
+                    'components.session',
+                    sprintf('Session component uses %s, which requires installing "yiisoft/yii2-redis".', Redis\Session::class)
+                );
+            } elseif ($hasYii2Redis && is_a($sessionClass, Redis\Session::class, true)) {
                 $results[] = $this->ok('components.session', "Session uses {$sessionClass}");
+            } elseif (is_a($sessionClass, Coroutine\ResettableInterface::class, true)) {
+                $results[] = $this->ok('components.session', "Session uses coroutine-safe {$sessionClass}");
+            } else {
+                $results[] = $this->error(
+                    'components.session',
+                    sprintf('Session component uses "%s"; native PHP $_SESSION is unsafe under concurrency. Set "class" => %s or a custom coroutine-safe %s implementation.', $sessionClass, Redis\Session::class, Coroutine\ResettableInterface::class)
+                );
             }
         }
 
         foreach ($components as $id => $definition) {
-            if (!is_array($definition)) {
+            if ($id === 'session' || !is_array($definition)) {
                 continue;
             }
             $class = $definition['class'] ?? null;
@@ -126,15 +142,6 @@ final class ConfigValidator
                     "components.{$id}",
                     sprintf('Uses unpooled yii\\db\\Connection. Configure "class" => %s for coroutine-safe pooling.', Db\Connection::class)
                 );
-            } elseif (is_string($class) && is_a($class, Db\Connection::class, true)) {
-                if (!empty($definition['masters']) || !empty($definition['slaves'])) {
-                    $results[] = $this->error(
-                        "components.{$id}",
-                        'masters/slaves replication is unsafe on a shared Db\\Connection; split into separate explicit components (e.g. "db" and "dbRead").'
-                    );
-                } else {
-                    $results[] = $this->ok("components.{$id}", "Pooled DB uses {$class}");
-                }
             } elseif ($class === 'yii\redis\Connection') {
                 $results[] = $this->warn(
                     "components.{$id}",
@@ -155,6 +162,30 @@ final class ConfigValidator
                     "components.{$id}",
                     sprintf('Uses yii\\queue\\redis\\Queue. Configure "class" => %s for coroutine queue workers.', Queue\RedisQueue::class)
                 );
+            } elseif (in_array($class, [Redis\Connection::class, Redis\Cache::class, Redis\Session::class], true) && !class_exists(\yii\redis\Connection::class)) {
+                $results[] = $this->error(
+                    "components.{$id}",
+                    sprintf('Component uses %s, which requires installing "yiisoft/yii2-redis".', $class)
+                );
+            } elseif ($class === HttpClient\Client::class && !class_exists(\yii\httpclient\Client::class)) {
+                $results[] = $this->error(
+                    "components.{$id}",
+                    sprintf('Component uses %s, which requires installing "yiisoft/yii2-httpclient".', $class)
+                );
+            } elseif ($class === Queue\RedisQueue::class && !class_exists(\yii\queue\cli\Queue::class)) {
+                $results[] = $this->error(
+                    "components.{$id}",
+                    sprintf('Component uses %s, which requires installing "yiisoft/yii2-queue" (^2.3.7).', $class)
+                );
+            } elseif (is_string($class) && is_a($class, Db\Connection::class, true)) {
+                if (!empty($definition['masters']) || !empty($definition['slaves'])) {
+                    $results[] = $this->error(
+                        "components.{$id}",
+                        'masters/slaves replication is unsafe on a shared Db\\Connection; split into separate explicit components (e.g. "db" and "dbRead").'
+                    );
+                } else {
+                    $results[] = $this->ok("components.{$id}", "Pooled DB uses {$class}");
+                }
             }
         }
 

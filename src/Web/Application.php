@@ -175,16 +175,27 @@ class Application extends BaseApplication
 
     /**
      * Override core components so Yii2 apps get coroutine-safe web components explicitly by default.
+     *
+     * Because yiisoft/yii2-redis is an optional dependency, `session` defaults to Redis\Session
+     * only when yiisoft/yii2-redis is installed; otherwise it is intentionally unset rather than
+     * silently falling back to the coroutine-unsafe native yii\web\Session.
      */
     public function coreComponents(): array
     {
-        return array_merge(parent::coreComponents(), [
+        $components = array_merge(parent::coreComponents(), [
             'request' => ['class' => Request::class],
             'response' => ['class' => Response::class],
             'errorHandler' => ['class' => ErrorHandler::class],
-            'session' => ['class' => Session::class],
             'user' => ['class' => User::class],
         ]);
+
+        if (class_exists(\yii\redis\Session::class)) {
+            $components['session'] = ['class' => Session::class];
+        } else {
+            unset($components['session']);
+        }
+
+        return $components;
     }
 
     /**
@@ -427,6 +438,10 @@ class Application extends BaseApplication
         }
 
         if (!$this->isCoroutineContext()) {
+            if ($id === 'session' && !parent::has('session') && $throwException) {
+                $this->throwMissingSessionException();
+            }
+
             $instance = parent::get($id, $throwException);
             if (is_object($instance) && isset($this->sharedComponentMap[$id])) {
                 $this->sharedInstances[$id] = $instance;
@@ -486,6 +501,10 @@ class Application extends BaseApplication
 
         if ($definition === null && !array_key_exists($id, $this->definitionCache)) {
             if ($throwException) {
+                if ($id === 'session') {
+                    $this->throwMissingSessionException();
+                }
+
                 throw new InvalidConfigException("Unknown component ID: {$id}");
             }
 
@@ -644,6 +663,15 @@ class Application extends BaseApplication
     private function rebuildSharedComponentMap(): void
     {
         $this->sharedComponentMap = array_fill_keys($this->sharedComponentIds, true);
+    }
+
+    private function throwMissingSessionException(): never
+    {
+        throw new InvalidConfigException(sprintf(
+            'Component "session" is not configured. Native yii\\web\\Session is unsafe under Swoole coroutines; '
+            . 'install "yiisoft/yii2-redis" to enable %s by default, or explicitly configure a coroutine-safe "session" component.',
+            Session::class
+        ));
     }
 
     private function createInitLock(): Channel

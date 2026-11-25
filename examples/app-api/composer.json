@@ -9,9 +9,10 @@
     "require": {
         "php": ">=8.1",
         "ext-swoole": "^6.0",
+        "dacheng-php/yii2-swoole": "@dev",
         "yiisoft/yii2": "~2.0.45",
         "yiisoft/yii2-httpclient": "^2.0",
-        "yiisoft/yii2-queue": "^2.0",
+        "yiisoft/yii2-queue": "^2.3.7",
         "yiisoft/yii2-redis": "^2.0"
     },
     "require-dev": {
@@ -20,8 +21,10 @@
     },
     "autoload": {
         "psr-4": {
-            "app\\": "./",
-            "Dacheng\\Yii2\\Swoole\\": "../../src/"
+            "app\\controllers\\": "controllers/",
+            "app\\helpers\\": "helpers/",
+            "app\\jobs\\": "jobs/",
+            "app\\models\\": "models/"
         }
     },
     "config": {
@@ -48,6 +51,13 @@
         }
     },
     "repositories": [
+        {
+            "type": "path",
+            "url": "../..",
+            "options": {
+                "symlink": true
+            }
+        },
         {
             "type": "composer",
             "url": "https://asset-packagist.org"
