@@ -36,6 +36,9 @@ class ErrorHandler extends BaseErrorHandler
 
         try {
             $this->logException($exception);
+            if ($this->discardExistingOutput) {
+                $this->clearOutput();
+            }
             $this->renderException($exception);
         } catch (Throwable $e) {
             Yii::error($e, __METHOD__);

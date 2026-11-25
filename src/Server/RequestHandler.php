@@ -143,6 +143,8 @@ final class RequestHandler
             $swooleResponse->header('X-Request-Id', $context->getRequestId());
         }
 
+        $initialObLevel = ob_get_level();
+
         try {
             [$request, $response] = $app->beginCoroutineRequest();
             $request->populateFromSwoole($swooleRequest);
@@ -169,7 +171,7 @@ final class RequestHandler
         } catch (Throwable $exception) {
             $this->handleException($app, $exception, $swooleResponse);
         } finally {
-            $this->cleanup($app);
+            $this->cleanup($app, $initialObLevel);
             $this->activeRequests = max(0, $this->activeRequests - 1);
         }
     }
@@ -242,8 +244,10 @@ final class RequestHandler
         }
     }
 
-    private function cleanup(Application $app): void
+    private function cleanup(Application $app, int $initialObLevel): void
     {
+        $this->discardLeakedOutputBuffers($initialObLevel);
+
         if (Logger::hasCoroutineActivity()) {
             try {
                 $this->flushCoroutineLogger($app);
@@ -255,6 +259,16 @@ final class RequestHandler
         $app->clearCoroutineContext();
         UploadedFile::reset();
         RequestContext::clear();
+    }
+
+    private function discardLeakedOutputBuffers(int $targetLevel): void
+    {
+        while (ob_get_level() > $targetLevel) {
+            if (!@ob_end_clean()) {
+                @ob_clean();
+                break;
+            }
+        }
     }
 
     private function flushCoroutineLogger(Application $app): void
