@@ -1,36 +1,30 @@
 # Yii2-Swoole
 
-**Yii2-Swoole** 是面向生产环境的 Yii2 × Swoole 6 协程运行时适配层与协程组件扩展包。
+![PHP >= 8.1](https://img.shields.io/badge/PHP-%3E%3D8.1-777BB4?logo=php&logoColor=white)
+![Swoole >= 6.0](https://img.shields.io/badge/Swoole-%3E%3D6.0-2E8B57)
+![Yii2 >= 2.0](https://img.shields.io/badge/Yii2-%3E%3D2.0-42B983)
+![License MIT](https://img.shields.io/badge/License-MIT-blue)
 
-让既有 Yii2 应用通过**少量、显式、1:1 镜像 Yii2 风格的配置适配**即可安全、稳定、高性能地运行在常驻 Swoole HTTP Server 之上；拒绝隐式配置篡改与隐藏控制流，保持简洁、直接、实用。
+让传统 Yii2 应用通过少量、显式的配置即可稳定运行在常驻 **Swoole 6** 协程引擎之上，同时提供面向协程的并发、连接池与异步组件基座。
+
+**设计理念**：保留原汁原味的 Yii2 编程习惯与声明式配置，一切显式化、零配置魔法——标准 `yii` 入口脚本无需修改，配置里写什么类，运行时就是什么类。
+
+---
 
 ## 核心特性
 
-- **1:1 镜像 Yii2 包结构**：`Web\*`、`Db\*`、`Redis\*`、`Log\*`、`HttpClient\*`、`Queue\*` 直接对应 Yii2 官方命名空间，配以 `Server\*`、`Console\*`、`Coroutine\*`、`Pool\*` 四个基础设施包，单层扁平零冗余。
-- **高性能 `SWOOLE_BASE` 协程引擎**：零 Master→Worker IPC 拷贝、内核 `SO_REUSEPORT` 多核负载均衡、`workers=1..N` 弹性伸缩、C 级静态文件与压缩、内置 `reload_async` 无损热重载与 `maxMemoryMb` 内存水位守卫。
-- **彻底的协程状态隔离与热路径优化**：
-  - `Web\Application` 将 `Yii::$app` 的请求态属性（`$controller`、`$requestedRoute`、`$state`、`$language`、`$layout`、`$loadedModules`、`$homeUrl`）与请求级组件全量协程化。
-  - **三层组件模型 + O(1) 共享缓存 + 原型克隆**：共享组件启动期预热并缓存于 `$sharedInstances` O(1) 直达；请求级组件原型克隆免去每请求反射。
-- **完整且安全的 Yii2 Web 语义桥接**：
-  - `Web\Request` 完全脱离超全局变量，支持 `trustedHosts` 代理头安全过滤、原型期预实例化 `JsonParser` 与 Cookie HMAC 校验。
-  - `Web\UploadedFile` 协程化文件上传，消除 `UploadedFile::$_files` 静态竞态。
-  - `Web\Response` 完整保留多值 Header、签名 Cookie、大流 `write()` 分块与零拷贝 `sendfile()`。
-  - `Web\ErrorHandler` 完整支持 `errorAction` 路由与 JSON/XML/HTML/RAW 渲染。
-- **LIFO 弹性连接池（`Pool\ConnectionPool` + `Pool\PoolRegistry`）**：
-  - 纯 PHP 内存栈 LIFO 热路径（零 Channel 阻塞调用，热连接局部性最优、冷连接自然过期缩容）；
-  - `PooledConnection` 显式状态机杜绝 double-release 双借串话；
-  - `Db\Command` 断线即时标记丢弃，`Coroutine::defer()` 自动回滚事务并归还连接。
-- **显式、零魔法的 DX 与运维工具链**：
-  - 标准 Yii2 `yii` 入口脚本零改动、无隐藏配置重写器；
-  - `php yii swoole/{start,stop,reload,status,check}` 完整进程管控与启动前安全审计；
-  - `php yii swoole/start --watch` 开发模式文件变更自动平滑重载；
-  - `Coroutine\Concurrent` 结构化并发工具箱与 `Server\RuntimeStats` 可观测快照。
+- **1:1 镜像 Yii2 组件**：按 Yii2 原生命名空间提供 `Web`、`Db`、`Redis`、`Log`、`HttpClient`、`Queue` 协程安全实现，迁移成本低、IDE 提示友好。
+- **高性能多 Worker HTTP 服务**：基于 Swoole 6 协程引擎，内置静态文件服务、开发期 `--watch` 自动重载、零停机平滑 `reload` 与内存水位保护。
+- **彻底的协程状态隔离**：请求态属性与 `request`、`response`、`session`、`user`、`UploadedFile` 严格按协程隔离，告别并发串话与超全局变量污染。
+- **内置弹性连接池**：为数据库（PDO）和 Redis 提供协程连接池，支持最小预热、最大并发限制、空闲缩容、借出前健康探活及协程结束自动归还。
+- **开箱即用的协程工具集**：内置异步批量日志落盘（多 Worker 安全轮转）、协程 HTTP 客户端、协程 Redis 队列以及结构化并发助手 `Concurrent::run()`。
+- **清晰的运维与可观测体验**：提供 `php yii swoole/check` 启动前安全预检、`start / stop / reload / status` 完整 CLI 管控及 `RuntimeStats::snapshot()` 运行时指标快照。
 
 ## 环境要求
 
 - PHP >= 8.1
-- ext-swoole >= 6.0
-- yiisoft/yii2 >= 2.0
+- Swoole >= 6.0（`ext-swoole`）
+- Yii2 >= 2.0（`yiisoft/yii2`）
 
 ## 安装
 
@@ -38,13 +32,13 @@
 composer require dacheng-php/yii2-swoole
 ```
 
-## 快速开始（3 步显式适配）
+## 快速上手（3 步接入）
 
-标准 Yii2 `yii` 入口脚本（`new yii\console\Application($config)`）**无需修改**。只需按以下 3 步显式声明组件类：
+标准 Yii2 `yii` 控制台入口脚本（`new yii\console\Application($config)`）**无需任何改动**。
 
 ### 1. 适配 `config/web.php`
 
-显式指定 `'class' => Web\Application::class`，并将需要协程化/池化的组件替换为对应的协程类（`request`、`response`、`errorHandler`、`user` 已由 `Web\Application::coreComponents()` 默认提供协程安全实现）：
+将应用类设为 `Web\Application`（`request`、`response`、`errorHandler`、`session`、`user` 已自动默认提供协程安全实现），并按需替换数据库、Redis、缓存、日志等组件：
 
 ```php
 <?php
@@ -104,9 +98,9 @@ return [
 ];
 ```
 
-### 2. 在 `config/console.php` 显式注册 `SwooleController` 与 `HttpServer`
+### 2. 在 `config/console.php` 注册 Server 与 CLI 命令
 
-`Server\HttpServer` 仅配置在 `console.php`，绝不泄漏到 Web Worker 进程：
+> 注意：`Server\HttpServer` 只配置在 `console.php`，不要放进 `common.php` 或 `web.php`。
 
 ```php
 <?php
@@ -125,7 +119,7 @@ return [
     'components' => [
         'swooleHttpServer' => [
             'class' => Server\HttpServer::class,
-            'host' => '0.0.0.0',
+            'host' => '127.0.0.1',
             'port' => 9501,
             'workers' => 4,
             'webConfig' => __DIR__ . '/web.php',
@@ -138,26 +132,43 @@ return [
 ### 3. 预检并启动服务
 
 ```bash
-# 1. 启动前安全预检（审计 PHP/Swoole 版本、拓扑模式与组件协程安全配置）
+# 1. 启动前配置安全预检（看到 "Preflight check passed." 即就绪）
 php yii swoole/check
 
-# 2. 开发模式启动（代码变更自动平滑重载）
+# 2. 开发模式启动（代码变更自动热重载）
 php yii swoole/start --watch --workers=1
 
-# 3. 生产模式启动（指定 Worker 数与监听地址）
+# 3. 生产模式启动（建议开启 CLI OPcache）
 php -d opcache.enable_cli=1 yii swoole/start --host=0.0.0.0 --port=9501 --workers=4
+```
 
-# 4. 运维管控
+启动后访问 `http://127.0.0.1:9501` 即可验证服务。日常运维命令：
+
+```bash
 php yii swoole/status   # 查看运行状态与 PID
 php yii swoole/reload   # 零停机平滑重载 Worker（SIGUSR1）
 php yii swoole/stop     # 优雅停机（SIGTERM，等待在途请求与资源释放）
 ```
 
-## 业务层协程原生能力
+## 组件对照表
+
+| Yii2 原生组件 | Yii2-Swoole 协程组件 | 说明 |
+| --- | --- | --- |
+| `yii\web\Application` | `Dacheng\Yii2\Swoole\Web\Application` | 协程隔离应用门面（默认内置协程 `request`/`response`/`errorHandler`/`session`/`user`） |
+| `yii\web\UploadedFile` | `Dacheng\Yii2\Swoole\Web\UploadedFile` | 协程安全文件上传（支持单文件、多文件与 Model 表单校验） |
+| `yii\db\Connection` | `Dacheng\Yii2\Swoole\Db\Connection` | PDO 协程连接池，自动探活与断线丢弃 |
+| `yii\redis\Connection` | `Dacheng\Yii2\Swoole\Redis\Connection` | Redis 协程连接池 |
+| `yii\redis\Cache` | `Dacheng\Yii2\Swoole\Redis\Cache` | 协程安全 Redis 缓存 |
+| `yii\redis\Session` / `yii\web\Session` | `Dacheng\Yii2\Swoole\Redis\Session` | 协程安全 Redis Session |
+| `yii\httpclient\Client` | `Dacheng\Yii2\Swoole\HttpClient\Client` | 非阻塞协程 HTTP 客户端（支持批量并发） |
+| `yii\queue\redis\Queue` | `Dacheng\Yii2\Swoole\Queue\RedisQueue` | 协程并发 Redis 队列（`php yii queue/listen`） |
+| `yii\log\FileTarget` | `Dacheng\Yii2\Swoole\Log\FileTarget` | 异步批量落盘与多 Worker 安全轮转 |
+
+## 常用能力速览
 
 ### 结构化并发（`Coroutine\Concurrent`）
 
-自动捕获异常、限制并发度，子协程内借出的 DB/Redis 连接退出即由 `Coroutine::defer()` 自动归还：
+并行拉取多路 I/O，自动限流、捕获异常并回收子协程连接：
 
 ```php
 use Dacheng\Yii2\Swoole\Coroutine\Concurrent;
@@ -171,6 +182,8 @@ $data = Concurrent::run([
 
 ### 协程安全文件上传（`Web\UploadedFile`）
 
+完全替代依赖 `$_FILES` 的 `yii\web\UploadedFile`，直接兼容 Yii2 `FileValidator`：
+
 ```php
 use Dacheng\Yii2\Swoole\Web\UploadedFile;
 
@@ -180,7 +193,9 @@ if ($file !== null) {
 }
 ```
 
-### 运行时指标与连接池监控（`Server\RuntimeStats`）
+### 运行时监控快照（`Server\RuntimeStats`）
+
+一行代码即可在健康检查或监控接口中暴露 Worker、请求、协程与全部连接池状态：
 
 ```php
 use Dacheng\Yii2\Swoole\Server\RuntimeStats;
@@ -191,11 +206,31 @@ public function actionStats(): array
 }
 ```
 
-## 文档
+## 示例项目
 
-- [架构设计与显式化演进说明](docs/architecture.md)
-- [迁移指南、协程安全规范与运维手册](docs/guide.md)
+仓库内置开箱即用的完整示例，可直接运行体验：
+
+- **[examples/app-api](examples/app-api/README.md)**：REST API 综合示例，覆盖连接池、Redis 缓存与 Session、协程 HTTP 客户端、异步队列、异步日志、文件上传/下载及健康检查端点。
+- **[examples/app-basic](examples/app-basic)**：基于 `yii2-app-basic` 改造的经典 MVC 页面与表单示例。
+
+快速试跑 `app-api` 示例：
+
+```bash
+cd examples/app-api
+composer install
+php yii swoole/check
+php yii swoole/start --watch --workers=1
+```
+
+## 进阶文档
+
+- [使用与迁移指南](docs/guide.md) — 传统 Yii2 迁移清单、协程安全开发红线、连接池容量规划与运维参数调优
+- [架构设计文档](docs/architecture.md) — 设计哲学、PHP/Yii2/Swoole 边界、10 包分层架构与核心机制剖析
+
+## 演进方向
+
+当前版本聚焦于稳定、高效地以 Swoole 6 驱动传统 Yii2 HTTP 应用及核心协程组件。在此基础上，项目依托通用协程与连接池基座，计划逐步拓展更多高性能网络与实时场景（如 **SSE、WebSocket、TCP / UDP Server、Gateway** 等），相关排期与讨论见 [GitHub Issues](https://github.com/dacheng-php/yii2-swoole/issues)。
 
 ## License
 
-MIT
+本项目基于 [MIT](LICENSE) 协议开源。
