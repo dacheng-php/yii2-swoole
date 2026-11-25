@@ -110,18 +110,10 @@ class UploadedFile extends BaseUploadedFile
 
         $files = [];
         foreach ($rawFiles as $class => $info) {
-            if (!is_array($info) || !isset($info['name'])) {
+            if (!is_array($info)) {
                 continue;
             }
-            self::collectFilesRecursive(
-                $files,
-                (string) $class,
-                $info['name'],
-                $info['tmp_name'] ?? '',
-                $info['type'] ?? '',
-                $info['size'] ?? 0,
-                $info['error'] ?? UPLOAD_ERR_NO_FILE
-            );
+            self::collectNode($files, (string) $class, $info);
         }
 
         if ($inCoroutine) {
@@ -129,6 +121,50 @@ class UploadedFile extends BaseUploadedFile
         }
 
         return $files;
+    }
+
+    /**
+     * Collects uploaded files from both Swoole's native nested file structure
+     * (e.g. ['files' => [0 => ['name' => ...]], 'Model' => ['attr' => ['name' => ...]]])
+     * and PHP's transposed $_FILES structure.
+     *
+     * @param array<string, static> $files
+     * @param array<string|int, mixed> $node
+     */
+    private static function collectNode(array &$files, string $key, array $node): void
+    {
+        if (array_key_exists('name', $node) && array_key_exists('tmp_name', $node)) {
+            if (is_array($node['name'])) {
+                self::collectFilesRecursive(
+                    $files,
+                    $key,
+                    $node['name'],
+                    $node['tmp_name'],
+                    $node['type'] ?? [],
+                    $node['size'] ?? [],
+                    $node['error'] ?? []
+                );
+                return;
+            }
+
+            $error = (int) ($node['error'] ?? UPLOAD_ERR_NO_FILE);
+            if ($error !== UPLOAD_ERR_NO_FILE) {
+                $files[$key] = new static([
+                    'name' => (string) $node['name'],
+                    'tempName' => (string) $node['tmp_name'],
+                    'type' => (string) ($node['type'] ?? ''),
+                    'size' => (int) ($node['size'] ?? 0),
+                    'error' => $error,
+                ]);
+            }
+            return;
+        }
+
+        foreach ($node as $subKey => $subNode) {
+            if (is_array($subNode)) {
+                self::collectNode($files, "{$key}[{$subKey}]", $subNode);
+            }
+        }
     }
 
     /**

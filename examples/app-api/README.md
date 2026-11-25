@@ -177,6 +177,41 @@ curl http://localhost:9501/log/stats
 curl http://localhost:9501/log/stress?count=1000
 ```
 
+### File Upload & Download (`Web\UploadedFile`)
+```bash
+# List uploaded files & endpoints
+curl http://localhost:9501/upload
+
+# Single file upload (with optional form field)
+curl -X POST \
+  -F "file=@README.md" \
+  -F "note=hello swoole" \
+  http://localhost:9501/upload/single
+
+# Multiple files upload
+curl -X POST \
+  -F "files[]=@README.md" \
+  -F "files[]=@composer.json" \
+  http://localhost:9501/upload/multiple
+
+# Yii2 Model + FileValidator upload (single or multiple)
+curl -X POST \
+  -F "UploadForm[file]=@README.md" \
+  -F "UploadForm[note]=model upload" \
+  http://localhost:9501/upload/model
+
+curl -X POST \
+  -F "UploadForm[files][]=@README.md" \
+  -F "UploadForm[files][]=@composer.json" \
+  http://localhost:9501/upload/model
+
+# Download an uploaded file via Web\Response::sendFile()
+curl -O -J "http://localhost:9501/upload/download?name=<stored_name>"
+
+# Cleanup uploaded demo files
+curl -X POST http://localhost:9501/upload/cleanup
+```
+
 ## Architecture
 
 ```
@@ -246,6 +281,7 @@ YII_SESSION_TIMEOUT=1440
 | Session | `SessionController` | Coroutine-safe session storage via Redis (`Yii::$app->session`) |
 | Queue | `QueueController` | Background job processing with coroutines |
 | Logging | `LogController` | Async logging with coroutine channels |
+| File Upload | `UploadController` | Coroutine-safe single/multiple/model uploads (`Web\UploadedFile`) & download (`sendFile`) |
 
 ## Performance Testing
 
